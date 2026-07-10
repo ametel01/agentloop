@@ -13,7 +13,7 @@
 ## Checklist
 
 - [x] Step 0: Progress and changelog tracking setup.
-- [ ] Step 1: Ready-issue discovery and scope contract.
+- [x] Step 1: Ready-issue discovery and scope contract.
 - [ ] Step 2: Idempotent dispatch CLI and durable queueing.
 - [ ] Step 3: Durable run identity in coordinator prompts.
 - [ ] Step 4: GitHub-visible claim protocol in installed skills.
@@ -31,8 +31,8 @@
 
 ## Current Status
 
-- Status: Step 0 complete.
-- Next step: begin Step 1 ready-issue discovery and scope contract.
+- Status: Step 1 complete.
+- Next step: begin Step 2 idempotent dispatch CLI and durable queueing.
 
 ## Update Rules
 
@@ -44,4 +44,7 @@
 
 - 2026-07-10: Created progress tracking from `PLAN.md` and recorded initial repository state.
 - 2026-07-10: Step 0 validation passed: `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, `git diff --check`, and `git -C /Users/alexmetelli/.agents/skills diff --check`.
-- 2026-07-10: Step 0 Agentloop commit subject: `docs: initialize label dispatch implementation tracking`.
+- 2026-07-10: Step 0 Agentloop commit: `5e4cb2d` (`docs: initialize label dispatch implementation tracking`).
+- 2026-07-10: Step 1 added `src/application/dispatch.ts` and `test/unit/dispatch.test.ts` for label preflight, deterministic ready-issue discovery, fail-closed JSON parsing, cap handling, and scope-only objective construction.
+- 2026-07-10: Step 1 validation passed: `bun test test/unit/dispatch.test.ts`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, and `git diff --check`.
+- 2026-07-10: Step 1 Agentloop commit subject: `feat: add ready issue discovery contract`.
