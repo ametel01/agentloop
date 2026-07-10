@@ -285,11 +285,28 @@ Source: `PLAN.md`
 - Changelog: No Step 11 entry because this step shipped documentation, tests, and validation only.
 - Commit: `docs: finalize agentloop operations`
 
+### Post-Acceptance Fix: Strict Control-Envelope Schema
+
+- Status: Complete
+- Failure reproduced from a foreground run:
+  - The Responses API rejected `approval.operation: {}` because the schema node had no `type`.
+  - `blocker.evidence: {}` had the same unsupported open-ended shape and would have failed next.
+- Fix:
+  - Replaced the approval operation with a strict `{ action, target, details }` object.
+  - Replaced blocker evidence with an array of strings.
+  - Added parser coverage and a recursive regression check for typed schema nodes, closed objects, and required properties.
+  - Updated the opt-in SDK smoke test to exercise the production control-envelope schema instead of a toy one-field schema.
+- Validation:
+  - `bun run verify` passed with 55 tests passed, 1 opt-in live test skipped, and a successful build.
+  - `AGENTLOOP_LIVE=1 bun test test/live/sdk-smoke.test.ts --timeout 120000` passed against fresh and resumed Codex SDK threads.
+- Changelog: Added a fix entry for strict Structured Outputs compatibility.
+- Commit: Pending.
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
-- SDK compatibility: production SDK import and default fake-backed streaming adapter tests pass; opt-in live start/resume smoke exists but was skipped.
+- SDK compatibility: production SDK import, fake-backed streaming tests, and the opt-in live start/resume smoke pass with the production control-envelope schema.
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: v1 remains a single-host local harness; turn-level recovery is at least once; inner Codex turn side effects are not exactly once; redaction is best-effort pattern matching; live SDK start/resume remains opt-in and was not run without explicit model-call authorization.
+- Known durability limitations: v1 remains a single-host local harness; turn-level recovery is at least once; inner Codex turn side effects are not exactly once; redaction is best-effort pattern matching; live SDK start/resume remains opt-in.

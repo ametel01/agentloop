@@ -65,7 +65,7 @@ Model selection:
 
 - If `--model MODEL` is supplied, the coordinator thread uses it.
 - If omitted, Codex inherits the local default.
-- Native sub-agents inherit the parent Codex selection.
+- Native sub-agents inherit the parent Codex selection unless a matching custom agent file supplies a role-specific model override.
 
 ## Detached Runs And Worker
 

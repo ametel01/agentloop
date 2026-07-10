@@ -327,7 +327,11 @@ function waitingApprovalEvents(): ThreadEvent[] {
         text: JSON.stringify({
           approval: {
             kind: "human_merge",
-            operation: { merge: true, pr: 123 },
+            operation: {
+              action: "merge pull request",
+              details: "Merge after all required checks pass",
+              target: "pull request 123",
+            },
             question: "Approve merge?",
             risk: "Merges code",
           },

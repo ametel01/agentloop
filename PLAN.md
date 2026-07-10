@@ -48,7 +48,7 @@
 - Prevent concurrent external coordinators from operating on the same repository while allowing the coordinator skill to manage its own internal sub-agent concurrency.
 - Make runs inspectable through structured status and event commands without requiring an external service or dashboard.
 - Support foreground execution for development and a durable worker mode suitable for supervision by `launchd`, systemd, or another process manager.
-- Preserve the selected coordinator model: an explicit CLI model overrides Codex configuration; otherwise the run inherits the local Codex default, and all native sub-agents inherit that parent selection.
+- Preserve the selected coordinator model: an explicit CLI model overrides Codex configuration; otherwise the run inherits the local Codex default. Native sub-agents inherit that parent selection unless the Codex runtime loads a matching external custom-agent override.
 
 ## Non-Goals
 

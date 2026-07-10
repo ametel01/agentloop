@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Make approval and blocker control-envelope fields valid strict Structured Outputs schemas.
+
 ### Security
 
 - Harden CLI input, secret redaction, repository surface warnings, and fail-closed state handling.

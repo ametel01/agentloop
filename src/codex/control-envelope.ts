@@ -12,13 +12,17 @@ export interface ControlEnvelope {
     kind: string;
     question: string;
     risk: string;
-    operation: unknown;
+    operation: {
+      action: string;
+      target: string;
+      details: string;
+    };
   };
   blocker: null | {
     kind: string;
     message: string;
     attemptedOperation: string;
-    evidence: unknown;
+    evidence: string[];
   };
 }
 
@@ -55,7 +59,16 @@ export const CONTROL_ENVELOPE_SCHEMA = {
             kind: { type: "string" },
             question: { type: "string" },
             risk: { type: "string" },
-            operation: {},
+            operation: {
+              type: "object",
+              additionalProperties: false,
+              required: ["action", "target", "details"],
+              properties: {
+                action: { type: "string" },
+                target: { type: "string" },
+                details: { type: "string" },
+              },
+            },
           },
         },
       ],
@@ -71,7 +84,7 @@ export const CONTROL_ENVELOPE_SCHEMA = {
             kind: { type: "string" },
             message: { type: "string" },
             attemptedOperation: { type: "string" },
-            evidence: {},
+            evidence: { type: "array", items: { type: "string" } },
           },
         },
       ],
@@ -150,6 +163,20 @@ function assertApproval(value: unknown): asserts value is ControlEnvelope["appro
   assertString(value.kind, "approval.kind");
   assertString(value.question, "approval.question");
   assertString(value.risk, "approval.risk");
+  assertOperation(value.operation);
+}
+
+function assertOperation(
+  value: unknown,
+): asserts value is NonNullable<ControlEnvelope["approval"]>["operation"] {
+  if (!isRecord(value)) {
+    throw new Error("approval.operation must be an object");
+  }
+
+  assertExactKeys(value, ["action", "details", "target"]);
+  assertString(value.action, "approval.operation.action");
+  assertString(value.target, "approval.operation.target");
+  assertString(value.details, "approval.operation.details");
 }
 
 function assertBlocker(value: unknown): asserts value is ControlEnvelope["blocker"] {
@@ -165,6 +192,7 @@ function assertBlocker(value: unknown): asserts value is ControlEnvelope["blocke
   assertString(value.kind, "blocker.kind");
   assertString(value.message, "blocker.message");
   assertString(value.attemptedOperation, "blocker.attemptedOperation");
+  assertStringArray(value.evidence, "blocker.evidence");
 }
 
 function assertExactKeys(value: Record<string, unknown>, keys: readonly string[]): void {
