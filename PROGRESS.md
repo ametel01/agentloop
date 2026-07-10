@@ -28,7 +28,7 @@ Source: `PLAN.md`
 
 - [x] Step 0: Progress and Changelog Tracking Setup
 - [x] Step 1: Toolchain and Quality Gates Setup
-- [ ] Step 2: Domain Contracts and Doctor Command
+- [x] Step 2: Domain Contracts and Doctor Command
 - [ ] Step 3: Durable Ledger and Run Lifecycle Commands
 - [ ] Step 4: Codex SDK Adapter and Foreground Coordinator Run
 - [ ] Step 5: Continuation, Resume, and Crash Recovery
@@ -41,10 +41,10 @@ Source: `PLAN.md`
 
 ## Current Status
 
-- Completed step: Step 1
-- Current implementation focus: Step 2
-- Next step: Step 2: Domain Contracts and Doctor Command
-- Last completed commit: Step 0, `0545985`
+- Completed step: Step 2
+- Current implementation focus: Step 3
+- Next step: Step 3: Durable Ledger and Run Lifecycle Commands
+- Last completed commit: Step 2, `feat: add repository and skill preflight`
 
 ## Validation Log
 
@@ -71,12 +71,33 @@ Source: `PLAN.md`
   - `bun run dist/cli.js --help` exited zero and printed scaffold usage.
 - Baseline result: quality gates are established and passing.
 - Changelog: No entry added because toolchain setup is not observable product behavior.
-- Commit: pending
+- Commit: `613af2a`
+
+### Step 2: Domain Contracts and Doctor Command
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 5 tests.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+  - `bun run dist/cli.js doctor --repo . --json` exited zero and produced 21 checks, 0 failures, and 4 expected warnings for local repository surfaces plus the trust boundary.
+- Doctor behavior:
+  - Resolves the canonical Git root.
+  - Checks Codex CLI availability, pinned SDK import, GitHub CLI availability, and GitHub CLI authentication.
+  - Resolves the local state directory and generated worktree root.
+  - Hashes required dev-team skill files and the `sub-agent-prompts.md` reference without loading skill bodies into prompts.
+  - Emits stable text or JSON output with warnings for repository instruction/config surfaces.
+- Changelog: Added entry for `agentloop doctor`.
+- Commit: `feat: add repository and skill preflight`
 
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
 - SDK compatibility: not tested yet.
+- SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: not run; opt-in Step 4 validation only.
 - Migration version: none yet.
 - Known durability limitations: no harness implementation exists yet.
