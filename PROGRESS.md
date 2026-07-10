@@ -18,7 +18,7 @@
 - [x] Step 3: Durable run identity in coordinator prompts.
 - [x] Step 4: GitHub-visible claim protocol in installed skills.
 - [x] Step 5: Operator polling, security, and recovery documentation.
-- [ ] Step 6: Final acceptance and `/goal` closure evidence.
+- [x] Step 6: Final acceptance and `/goal` closure evidence.
 
 ## Baseline
 
@@ -31,8 +31,8 @@
 
 ## Current Status
 
-- Status: Step 5 complete.
-- Next step: begin Step 6 final acceptance and `/goal` closure evidence.
+- Status: Complete.
+- Next step: deferred follow-up work only; no discovery producer, webhook, scheduler installation, PII path, or distributed claim mechanism was implemented.
 
 ## Update Rules
 
@@ -61,4 +61,11 @@
 - 2026-07-10: Step 4 Agentloop commit: `b47e474` (`docs: record dispatch claim integration`).
 - 2026-07-10: Step 5 documented dispatch syntax, fixed labels, dry-run/JSON output, worker handoff, polling no-op states, label setup, `launchd` shape, claim recovery, skill-fingerprint resume handling, and dispatch security boundaries.
 - 2026-07-10: Step 5 validation passed: built CLI help/content checks, `rg` documentation checks, `git diff --check`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`.
-- 2026-07-10: Step 5 Agentloop commit subject: `docs: document label dispatch operations`.
+- 2026-07-10: Step 5 Agentloop commit: `8e6360a` (`docs: document label dispatch operations`).
+- 2026-07-10: Step 6 final acceptance passed: built CLI help check, changelog category sanity check, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, `bun audit`, `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json`, Agentloop `git diff --check`, skills-repo `git diff --check`, and `bun dist/cli.js doctor --repo . --json`.
+- 2026-07-10: Step 6 final test summary: 69 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded, and `bun audit` reported no vulnerabilities.
+- 2026-07-10: Step 6 final doctor fingerprint: `e83051cb25937423435cf96d6d8861ac05ff818cae553fd279e594ef0e1cb087`; required skill checks passed with repository-surface warnings only.
+- 2026-07-10: Step 6 install note: `bun install --frozen-lockfile` was not required because dependencies and `bun.lock` were unchanged.
+- 2026-07-10: Step 6 repository state: Agentloop was clean before this final progress update and ahead of `origin/main` by six commits; skills repo was ahead by `17021eb` and retained pre-existing unstaged edits in `agent-team-status-protocol/SKILL.md`, `codex-dev-team-goal/SKILL.md`, and `team-coordinator/SKILL.md`.
+- 2026-07-10: Step 6 deferred follow-ups: a read-only health producer and cross-host stale-claim reconciliation remain future plans and were not implemented.
+- 2026-07-10: Step 6 Agentloop commit subject: `docs: record label dispatch acceptance`.
