@@ -21,6 +21,7 @@ import { AgentloopError, CliUsageError } from "./domain/errors.ts";
 import { DEFAULT_RUN_LIMITS, type RunLimits, type RunRecord, type RunUsage } from "./domain/run.ts";
 import { ProductionCommandRunner } from "./infrastructure/command-runner.ts";
 import { NodeFileSystem } from "./infrastructure/filesystem.ts";
+import { collectProgressFingerprint } from "./infrastructure/fingerprint.ts";
 import { SystemClock } from "./infrastructure/clock.ts";
 import { RandomIdGenerator } from "./infrastructure/ids.ts";
 import { sha256Hex } from "./infrastructure/hash.ts";
@@ -260,15 +261,30 @@ async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
 
   let currentRun = input.run;
   let currentTurnKind = input.firstTurnKind;
+  const heartbeat = startLeaseHeartbeat(store, input.run, ownerId, clock);
+  const abortController = new AbortController();
+  const signalCleanup = installSignalHandlers(abortController);
 
   try {
     while (true) {
       currentRun = transitionToRunningForExecution(store, currentRun, clock.now().toISOString());
+      const budgetReason = budgetExhaustionReason(currentRun, clock.now());
+      if (budgetReason !== null) {
+        return store.transitionRun({
+          expectedStatus: "running",
+          id: currentRun.id,
+          nextStatus: "budget_exhausted",
+          now: clock.now().toISOString(),
+          reason: budgetReason,
+        });
+      }
+
       currentRun = await executeSingleTurn({
         dependencies,
         io,
         message: input.message,
         run: currentRun,
+        signal: abortController.signal,
         store,
         turnKind: currentTurnKind,
       });
@@ -280,6 +296,8 @@ async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
       currentTurnKind = "continuation";
     }
   } finally {
+    signalCleanup();
+    heartbeat.stop();
     store.releaseLease(input.run.repoKey, ownerId);
   }
 }
@@ -291,10 +309,11 @@ interface ExecuteSingleTurnInput {
   io: CliIo;
   turnKind: TurnKind;
   message: string | null;
+  signal: AbortSignal;
 }
 
 async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunRecord> {
-  const { run, store, dependencies, io, turnKind } = input;
+  const { run, store, dependencies, io, turnKind, signal } = input;
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
   const turnId = idGenerator.randomId();
@@ -318,6 +337,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
     const events = await runner.runStreamed({
       outputSchema: CONTROL_ENVELOPE_SCHEMA,
       prompt,
+      signal,
       threadId: turnKind === "initial" ? null : run.threadId,
       threadOptions: buildThreadOptions({
         model: run.model,
@@ -381,9 +401,47 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       now: clock.now().toISOString(),
       usageDelta: usage,
     });
+    const budgetReason = budgetExhaustionReason(updatedRun, clock.now());
+    if (budgetReason !== null) {
+      return store.transitionRun({
+        expectedStatus: "running",
+        id: updatedRun.id,
+        nextStatus: "budget_exhausted",
+        now: clock.now().toISOString(),
+        reason: budgetReason,
+      });
+    }
+
+    const fingerprint = await collectProgressFingerprint(updatedRun, dependencies);
+    const unchanged =
+      envelope.status === "continue" &&
+      fingerprint.allSourcesAvailable &&
+      updatedRun.stateFingerprint === fingerprint.hash;
+    const noProgressCount = unchanged ? updatedRun.noProgressCount + 1 : 0;
+    const withProgress = store.updateProgress({
+      consecutiveFailures: 0,
+      id: updatedRun.id,
+      noProgressCount,
+      now: clock.now().toISOString(),
+      stateFingerprint: fingerprint.hash,
+    });
+
+    if (
+      envelope.status === "continue" &&
+      noProgressCount >= withProgress.limits.maxNoProgressTurns
+    ) {
+      return store.transitionRun({
+        expectedStatus: "running",
+        id: withProgress.id,
+        nextStatus: "stuck",
+        now: clock.now().toISOString(),
+        reason: "no progress detected across continuation turns",
+      });
+    }
+
     return store.transitionRun({
       expectedStatus: "running",
-      id: updatedRun.id,
+      id: withProgress.id,
       nextStatus: envelopeStatusToRunStatus(envelope.status),
       now: clock.now().toISOString(),
       reason: envelope.summary,
@@ -396,18 +454,78 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       finishedAt: clock.now().toISOString(),
       id: turnId,
       responseJson: finalText,
-      status: "failed",
+      status: signal.aborted ? "cancelled" : "failed",
       usage,
     });
-    store.transitionRun({
+    const latestRun = requireRun(store, run.id);
+    store.updateProgress({
+      consecutiveFailures: latestRun.consecutiveFailures + 1,
+      id: latestRun.id,
+      noProgressCount: latestRun.noProgressCount,
+      now: clock.now().toISOString(),
+      stateFingerprint: latestRun.stateFingerprint ?? "",
+    });
+    const failedRun = store.transitionRun({
       expectedStatus: "running",
       id: run.id,
-      nextStatus: "failed",
+      nextStatus: signal.aborted ? "cancelled" : "failed",
       now: clock.now().toISOString(),
       reason: message,
     });
+    if (signal.aborted) {
+      return failedRun;
+    }
+
     throw error;
   }
+}
+
+function budgetExhaustionReason(run: RunRecord, now: Date): string | null {
+  if (run.turnsCompleted >= run.limits.maxOuterTurns) {
+    return `maximum outer turns exhausted (${run.limits.maxOuterTurns})`;
+  }
+
+  const totalNonCachedTokens =
+    run.usage.inputTokens + run.usage.outputTokens + run.usage.reasoningTokens;
+  if (totalNonCachedTokens >= run.limits.maxTotalTokens) {
+    return `maximum non-cached tokens exhausted (${run.limits.maxTotalTokens})`;
+  }
+
+  const elapsedMs = now.getTime() - Date.parse(run.createdAt);
+  if (elapsedMs >= run.limits.maxWallDurationMs) {
+    return `maximum wall duration exhausted (${run.limits.maxWallDurationMs}ms)`;
+  }
+
+  return null;
+}
+
+function startLeaseHeartbeat(
+  store: SqliteRunStore,
+  run: RunRecord,
+  ownerId: string,
+  clock: Clock,
+): { stop: () => void } {
+  const interval = setInterval(() => {
+    const heartbeatAt = clock.now();
+    const expiresAt = new Date(heartbeatAt.getTime() + run.limits.leaseTtlMs);
+    store.renewLease(run.repoKey, ownerId, heartbeatAt.toISOString(), expiresAt.toISOString());
+  }, run.limits.leaseRenewIntervalMs);
+  interval.unref?.();
+
+  return {
+    stop: () => clearInterval(interval),
+  };
+}
+
+function installSignalHandlers(abortController: AbortController): () => void {
+  const abort = () => abortController.abort();
+  process.once("SIGINT", abort);
+  process.once("SIGTERM", abort);
+
+  return () => {
+    process.off("SIGINT", abort);
+    process.off("SIGTERM", abort);
+  };
 }
 
 function buildPrompt(turnKind: TurnKind, run: RunRecord, message: string | null): string {
@@ -756,11 +874,19 @@ function renderRunList(runs: readonly RunRecord[]): string {
 }
 
 function renderRun(run: RunRecord): string {
+  const nonCachedTokens =
+    run.usage.inputTokens + run.usage.outputTokens + run.usage.reasoningTokens;
+  const remainingTurns = Math.max(0, run.limits.maxOuterTurns - run.turnsCompleted);
+  const remainingTokens = Math.max(0, run.limits.maxTotalTokens - nonCachedTokens);
   return [
     `run: ${run.id}`,
     `status: ${run.status}`,
     `repo: ${run.repoPath}`,
     `objective: ${run.objective}`,
+    `remainingTurns: ${remainingTurns}`,
+    `remainingNonCachedTokens: ${remainingTokens}`,
+    `noProgressCount: ${run.noProgressCount}`,
+    `consecutiveFailures: ${run.consecutiveFailures}`,
     `created: ${run.createdAt}`,
     `updated: ${run.updatedAt}`,
     "",

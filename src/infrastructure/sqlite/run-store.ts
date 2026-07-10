@@ -50,6 +50,7 @@ export interface RunStore {
   listRuns(limit: number): RunRecord[];
   transitionRun(input: TransitionRunInput): RunRecord;
   updateSkillFingerprint(input: UpdateSkillFingerprintInput): RunRecord;
+  updateProgress(input: UpdateProgressInput): RunRecord;
   updateUsage(input: UpdateUsageInput): RunRecord;
   createTurn(input: CreateTurnInput): TurnRecord;
   completeTurn(input: CompleteTurnInput): TurnRecord;
@@ -71,6 +72,14 @@ export interface TransitionRunInput {
 export interface UpdateSkillFingerprintInput {
   id: string;
   skillFingerprint: string;
+  now: string;
+}
+
+export interface UpdateProgressInput {
+  id: string;
+  stateFingerprint: string;
+  noProgressCount: number;
+  consecutiveFailures: number;
   now: string;
 }
 
@@ -313,6 +322,34 @@ export class SqliteRunStore implements RunStore {
     this.database
       .query("UPDATE runs SET skill_fingerprint = ?, updated_at = ? WHERE id = ?")
       .run(input.skillFingerprint, input.now, input.id);
+
+    const run = this.getRun(input.id);
+    if (run === null) {
+      throw new StateConflictError(`Run ${input.id} does not exist`);
+    }
+
+    return run;
+  }
+
+  updateProgress(input: UpdateProgressInput): RunRecord {
+    this.database
+      .query(
+        `
+        UPDATE runs
+        SET state_fingerprint = ?,
+            no_progress_count = ?,
+            consecutive_failures = ?,
+            updated_at = ?
+        WHERE id = ?
+      `,
+      )
+      .run(
+        input.stateFingerprint,
+        input.noProgressCount,
+        input.consecutiveFailures,
+        input.now,
+        input.id,
+      );
 
     const run = this.getRun(input.id);
     if (run === null) {
@@ -571,6 +608,14 @@ export class SqliteRunStore implements RunStore {
         input.acquiredAt,
         input.expiresAt,
       );
+  }
+
+  renewLease(repoKey: string, ownerId: string, heartbeatAt: string, expiresAt: string): void {
+    this.database
+      .query(
+        "UPDATE leases SET heartbeat_at = ?, expires_at = ? WHERE repo_key = ? AND owner_id = ?",
+      )
+      .run(heartbeatAt, expiresAt, repoKey, ownerId);
   }
 
   releaseLease(repoKey: string, ownerId: string): void {

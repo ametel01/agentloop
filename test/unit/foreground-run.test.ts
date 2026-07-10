@@ -206,11 +206,141 @@ describe("foreground run", () => {
     const run = JSON.parse(statusJson.join("")) as { status: string };
     expect(run.status).toBe("waiting_approval");
   });
+
+  test("stops before a continuation when the turn budget is exhausted", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner([
+      continueEvents(),
+      completeWithoutThreadStartedEvents(),
+    ]);
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "turn budget", "--trust-repo", "--max-turns", "1"],
+      createDependencies(codexRunner, "v1", true),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(1);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string };
+    expect(run.status).toBe("budget_exhausted");
+  });
+
+  test("excludes cached tokens from the hard token budget", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "cached tokens", "--trust-repo", "--max-tokens", "17"],
+      createDependencies(new FakeCodexRunner(cachedHeavyCompleteEvents()), "v1", true),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      status: string;
+      usage: { cachedInputTokens: number };
+    };
+    expect(run.status).toBe("complete");
+    expect(run.usage.cachedInputTokens).toBe(999);
+  });
+
+  test("marks a run stuck after repeated unchanged available fingerprints", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner([continueEvents(), continueEvents(), continueEvents()]);
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "no progress", "--trust-repo"],
+      createDependencies(codexRunner, "v1", true),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(3);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string; noProgressCount: number };
+    expect(run.status).toBe("stuck");
+    expect(run.noProgressCount).toBe(2);
+  });
+
+  test("does not increment no-progress count when GitHub fingerprint collection fails", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "github unavailable", "--trust-repo"],
+      createDependencies(
+        new FakeCodexRunner([
+          continueEvents(),
+          continueEvents(),
+          completeWithoutThreadStartedEvents(),
+        ]),
+      ),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string; noProgressCount: number };
+    expect(run.status).toBe("complete");
+    expect(run.noProgressCount).toBe(0);
+  });
+
+  test("persists cancellation when a signal aborts the active turn", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "cancel signal", "--trust-repo"],
+      createDependencies(new SignalAbortingCodexRunner()),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string };
+    expect(run.status).toBe("cancelled");
+  });
 });
 
 function createDependencies<TCodexRunner extends CodexRunner>(
   codexRunner: TCodexRunner,
   skillVersion = "v1",
+  fingerprintAvailable = false,
 ) {
   const homeDir = "/home/alex";
   const repoPath = "/work/agentloop";
@@ -244,6 +374,14 @@ function createDependencies<TCodexRunner extends CodexRunner>(
         return { exitCode: 0, stdout: `${repoPath}\n`, stderr: "" };
       }
 
+      if (command === "git" && args[0] === "status") {
+        return { exitCode: 0, stdout: "## main\n", stderr: "" };
+      }
+
+      if (command === "git" && args[0] === "worktree") {
+        return { exitCode: 0, stdout: `worktree ${repoPath}\n`, stderr: "" };
+      }
+
       if (command === "codex") {
         return { exitCode: 0, stdout: "codex-cli 0.144.1\n", stderr: "" };
       }
@@ -254,6 +392,12 @@ function createDependencies<TCodexRunner extends CodexRunner>(
 
       if (command === "gh" && args[0] === "auth") {
         return { exitCode: 0, stdout: "github.com\n", stderr: "" };
+      }
+
+      if (command === "gh" && (args[0] === "issue" || args[0] === "pr")) {
+        return fingerprintAvailable
+          ? { exitCode: 0, stdout: "[]\n", stderr: "" }
+          : { exitCode: 1, stdout: "", stderr: "GitHub unavailable" };
       }
 
       return { exitCode: 127, stdout: "", stderr: "unexpected command" };
@@ -287,6 +431,7 @@ function continueEvents(): ThreadEvent[] {
 function completeEnvelopeEvents(options: {
   includeThreadStarted: boolean;
   status: "complete" | "continue";
+  cachedInputTokens?: number;
 }): ThreadEvent[] {
   const events: ThreadEvent[] = [
     ...(options.includeThreadStarted
@@ -316,7 +461,7 @@ function completeEnvelopeEvents(options: {
     {
       type: "turn.completed",
       usage: {
-        cached_input_tokens: 2,
+        cached_input_tokens: options.cachedInputTokens ?? 2,
         input_tokens: 10,
         output_tokens: 5,
         reasoning_output_tokens: 1,
@@ -324,6 +469,14 @@ function completeEnvelopeEvents(options: {
     },
   ];
   return events;
+}
+
+function cachedHeavyCompleteEvents(): ThreadEvent[] {
+  return completeEnvelopeEvents({
+    cachedInputTokens: 999,
+    includeThreadStarted: true,
+    status: "complete",
+  });
 }
 
 function malformedEvents(): ThreadEvent[] {
@@ -393,6 +546,16 @@ class ThrowingCodexRunner implements CodexRunner {
   async runStreamed(input: CodexRunInput): Promise<AsyncIterable<ThreadEvent>> {
     this.inputs.push(input);
     throw new Error(this.message);
+  }
+}
+
+class SignalAbortingCodexRunner implements CodexRunner {
+  readonly inputs: CodexRunInput[] = [];
+
+  async runStreamed(input: CodexRunInput): Promise<AsyncIterable<ThreadEvent>> {
+    this.inputs.push(input);
+    process.emit("SIGINT");
+    throw new Error("aborted by signal");
   }
 }
 

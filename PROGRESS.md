@@ -32,7 +32,7 @@ Source: `PLAN.md`
 - [x] Step 3: Durable Ledger and Run Lifecycle Commands
 - [x] Step 4: Codex SDK Adapter and Foreground Coordinator Run
 - [x] Step 5: Continuation, Resume, and Crash Recovery
-- [ ] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
+- [x] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
 - [ ] Step 7: Durable Human Approval Flow
 - [ ] Step 8: Detached Worker and Lease Recovery
 - [ ] Step 9: Event Inspection and Operator Observability
@@ -41,10 +41,10 @@ Source: `PLAN.md`
 
 ## Current Status
 
-- Completed step: Step 5
-- Current implementation focus: Step 6
-- Next step: Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
-- Last completed commit: Step 5, `feat: resume interrupted codex runs safely`
+- Completed step: Step 6
+- Current implementation focus: Step 7
+- Next step: Step 7: Durable Human Approval Flow
+- Last completed commit: Step 6, `feat: enforce run safety limits`
 
 ## Validation Log
 
@@ -157,6 +157,27 @@ Source: `PLAN.md`
 - Changelog: Added entry for durable continuation, resume, recovery prompts, and skill-change blocking.
 - Commit: `feat: resume interrupted codex runs safely`
 
+### Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 27 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+- Boundary behavior:
+  - Hard turn budgets stop before the next continuation turn.
+  - Hard token budgets count input, output, and reasoning tokens while excluding cached input tokens.
+  - Progress fingerprints include explicit source states for `STATUS.md`, Git status, worktrees, GitHub issues, and GitHub PRs.
+  - Repeated unchanged fully available fingerprints transition the run to `stuck`.
+  - Failed GitHub fingerprint collection does not increment no-progress state.
+  - Active runs renew their repository lease on the configured heartbeat interval.
+  - SIGINT/SIGTERM abort the active turn through `AbortController` and persist a consistent `cancelled` state.
+- Changelog: Added entry for run safety limits, progress detection, heartbeat renewal, and signal cancellation handling.
+- Commit: `feat: enforce run safety limits`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
@@ -164,4 +185,4 @@ Source: `PLAN.md`
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: continuation and explicit resume/recovery exist; budgets, progress fingerprinting, heartbeat renewal, detached worker recovery, and full approval command handling are not implemented yet.
+- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, and signal cancellation exist; detached worker recovery and full approval command handling are not implemented yet.
