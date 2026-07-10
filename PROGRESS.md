@@ -16,7 +16,7 @@
 - [x] Step 1: Ready-issue discovery and scope contract.
 - [x] Step 2: Idempotent dispatch CLI and durable queueing.
 - [x] Step 3: Durable run identity in coordinator prompts.
-- [ ] Step 4: GitHub-visible claim protocol in installed skills.
+- [x] Step 4: GitHub-visible claim protocol in installed skills.
 - [ ] Step 5: Operator polling, security, and recovery documentation.
 - [ ] Step 6: Final acceptance and `/goal` closure evidence.
 
@@ -31,8 +31,8 @@
 
 ## Current Status
 
-- Status: Step 3 complete.
-- Next step: begin Step 4 GitHub-visible claim protocol in installed skills.
+- Status: Step 4 complete.
+- Next step: begin Step 5 operator polling, security, and recovery documentation.
 
 ## Update Rules
 
@@ -53,4 +53,9 @@
 - 2026-07-10: Step 2 Agentloop commit: `0e12b56` (`feat: queue label scoped agentloop runs`).
 - 2026-07-10: Step 3 added durable run IDs to every coordinator prompt header and covered initial, continuation, recovery, and approval-response prompt construction.
 - 2026-07-10: Step 3 validation passed: targeted prompt/foreground tests, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, and `git diff --check`.
-- 2026-07-10: Step 3 Agentloop commit subject: `feat: expose run identity to coordinator turns`.
+- 2026-07-10: Step 3 Agentloop commit: `9ac78c7` (`feat: expose run identity to coordinator turns`).
+- 2026-07-10: Step 4 added the installed `codex-dev-team-goal` label-scoped dispatch claim protocol and eval case. Skills-repo commit: `17021eb` (`feat: add agentloop issue claim protocol`).
+- 2026-07-10: Step 4 validation passed: `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json`, `git -C /Users/alexmetelli/.agents/skills diff --check`, `git -C /Users/alexmetelli/.agents/skills diff --cached --check`, `bun dist/cli.js doctor --repo . --json`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`.
+- 2026-07-10: Step 4 installed-skill fingerprint from doctor: `e83051cb25937423435cf96d6d8861ac05ff818cae553fd279e594ef0e1cb087`. Existing runs with prior fingerprints must use the existing skill-change approval or `--accept-skill-change` flow before resume.
+- 2026-07-10: Step 4 skills-repo note: pre-existing unstaged edits remain in `agent-team-status-protocol/SKILL.md`, `codex-dev-team-goal/SKILL.md`, and `team-coordinator/SKILL.md`; only the dispatch protocol hunk and eval case were committed.
+- 2026-07-10: Step 4 Agentloop commit subject: `docs: record dispatch claim integration`.

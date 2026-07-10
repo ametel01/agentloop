@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Add GitHub-visible label claim guidance for dispatched issues, including same-run recovery, different-run refusal, existing-PR reuse, and terminal blocker evidence.
 - Include the durable Agentloop run ID in coordinator prompt headers for GitHub claim and recovery correlation.
 
 ### Fixed
