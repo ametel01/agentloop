@@ -699,6 +699,166 @@ describe("foreground run", () => {
     expect(terminalExit).toBe(0);
     expect(terminalWorker.inputs).toHaveLength(0);
   });
+
+  test("events replays ordered JSONL and stable text output", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-events-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "inspect events", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(completeEvents())),
+      quietIo(),
+    );
+
+    const jsonOutput: string[] = [];
+    const jsonExit = await runCli(
+      ["events", "id-1", "--json"],
+      createDependencies(new FakeCodexRunner([])),
+      {
+        stdout: (message) => jsonOutput.push(message),
+        stderr: () => {},
+      },
+    );
+
+    expect(jsonExit).toBe(0);
+    const jsonEvents = jsonOutput
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { sequence: number; eventType: string });
+    expect(jsonEvents.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect(jsonEvents.map((event) => event.eventType)).toEqual([
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "turn.completed",
+    ]);
+
+    const textOutput: string[] = [];
+    const textExit = await runCli(["events", "id-1"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => textOutput.push(message),
+      stderr: () => {},
+    });
+
+    expect(textExit).toBe(0);
+    expect(textOutput.join("")).toContain("harness: thread.started");
+    expect(textOutput.join("")).toContain("model: agent_message");
+    expect(textOutput.join("")).toContain("usage=input=10");
+  });
+
+  test("status includes turns, usage, lease, blocker, and harness labels", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-status-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "status details", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(completeEvents())),
+      quietIo(),
+    );
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const status = JSON.parse(statusJson.join("")) as {
+      heartbeatAgeMs: number | null;
+      latestBlocker: unknown;
+      lease: unknown;
+      status: string;
+      turns: Array<{ kind: string; usage: { inputTokens: number } }>;
+      usage: { inputTokens: number };
+    };
+
+    expect(status.status).toBe("complete");
+    expect(status.usage.inputTokens).toBe(10);
+    expect(status.turns).toHaveLength(1);
+    expect(status.turns[0]?.kind).toBe("initial");
+    expect(status.turns[0]?.usage.inputTokens).toBe(10);
+    expect(status.lease).toBeNull();
+    expect(status.heartbeatAgeMs).toBeNull();
+    expect(status.latestBlocker).toBeNull();
+
+    const statusText: string[] = [];
+    await runCli(["status", "id-1"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusText.push(message),
+      stderr: () => {},
+    });
+    expect(statusText.join("")).toContain("harness.status: complete");
+    expect(statusText.join("")).toContain("turn.usage: input=10");
+  });
+
+  test("events follow mode exits cleanly on signal after replay", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-events-follow-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "follow events", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(completeEvents())),
+      quietIo(),
+    );
+
+    const output: string[] = [];
+    const follow = runCli(
+      ["events", "id-1", "--follow"],
+      createDependencies(new FakeCodexRunner([])),
+      {
+        stdout: (message) => output.push(message),
+        stderr: () => {},
+      },
+    );
+    setTimeout(() => process.emit("SIGINT"), 0);
+
+    await expect(follow).resolves.toBe(0);
+    expect(output.join("")).toContain("harness: thread.started");
+  });
+
+  test("secret fixtures are redacted in database, event output, and status output", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-redaction-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+    const secret = "sk-secret123";
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "redact outputs", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(secretCompleteEvents(secret))),
+      quietIo(),
+    );
+
+    const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
+    const persisted = [
+      ...database
+        .query<{ value: string }, []>("SELECT payload_json AS value FROM events")
+        .all()
+        .map((row) => row.value),
+      ...database
+        .query<{ value: string | null }, []>("SELECT response_json AS value FROM turns")
+        .all()
+        .map((row) => row.value ?? ""),
+    ].join("\n");
+    database.close();
+    expect(persisted).not.toContain(secret);
+    expect(persisted).toContain("[redacted-secret]");
+
+    const eventsJson: string[] = [];
+    await runCli(["events", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => eventsJson.push(message),
+      stderr: () => {},
+    });
+    expect(eventsJson.join("")).not.toContain(secret);
+    expect(eventsJson.join("")).toContain("[redacted-secret]");
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    expect(statusJson.join("")).not.toContain(secret);
+    expect(statusJson.join("")).toContain("[redacted-secret]");
+  });
 });
 
 function createDependencies<TCodexRunner extends CodexRunner>(
@@ -882,6 +1042,42 @@ function cachedHeavyCompleteEvents(): ThreadEvent[] {
     includeThreadStarted: true,
     status: "complete",
   });
+}
+
+function secretCompleteEvents(secret: string): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      item: {
+        id: "message-1",
+        text: JSON.stringify({
+          approval: null,
+          blocker: null,
+          closureGatePassed: true,
+          evidence: {
+            issueUrls: [],
+            prUrls: [],
+            reviewUrls: [],
+            statusPath: "STATUS.md",
+          },
+          status: "complete",
+          summary: `done without leaking ${secret}`,
+        }),
+        type: "agent_message",
+      },
+      type: "item.completed",
+    },
+    {
+      type: "turn.completed",
+      usage: {
+        cached_input_tokens: 0,
+        input_tokens: 10,
+        output_tokens: 5,
+        reasoning_output_tokens: 1,
+      },
+    },
+  ];
 }
 
 function malformedEvents(): ThreadEvent[] {

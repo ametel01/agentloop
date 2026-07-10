@@ -35,16 +35,16 @@ Source: `PLAN.md`
 - [x] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
 - [x] Step 7: Durable Human Approval Flow
 - [x] Step 8: Detached Worker and Lease Recovery
-- [ ] Step 9: Event Inspection and Operator Observability
+- [x] Step 9: Event Inspection and Operator Observability
 - [ ] Step 10: Security and Failure-Mode Hardening
 - [ ] Step 11: Documentation, CI, and Final Acceptance
 
 ## Current Status
 
-- Completed step: Step 8
-- Current implementation focus: Step 9
-- Next step: Step 9: Event Inspection and Operator Observability
-- Last completed commit: Step 8, `feat: process queued runs with durable worker`
+- Completed step: Step 9
+- Current implementation focus: Step 10
+- Next step: Step 10: Security and Failure-Mode Hardening
+- Last completed commit: Step 9, `feat: expose durable run event history`
 
 ## Validation Log
 
@@ -218,6 +218,26 @@ Source: `PLAN.md`
 - Changelog: Added entry for detached worker execution and stale-lease recovery.
 - Commit: `feat: process queued runs with durable worker`
 
+### Step 9: Event Inspection and Operator Observability
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 40 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+- Replay and status behavior:
+  - `events RUN_ID [--json]` replays persisted events in run-local sequence order.
+  - `events RUN_ID --follow` polls for new events and exits cleanly on SIGINT/SIGTERM.
+  - Event JSON output is JSONL with parsed redacted payloads; text output labels harness lifecycle, model messages, command-like items, MCP-like items, file-like items, errors, and usage.
+  - `status RUN_ID --json` includes pending approvals, turn summaries, usage totals, lease metadata, heartbeat age, state fingerprint, no-progress count, latest blocker, and last error.
+  - Status text distinguishes harness state from model claims with explicit harness labels.
+  - Secret fixtures are redacted in persisted event payloads, persisted turn responses, event JSON/text output, and status JSON/text output.
+- Changelog: Added entry for event replay, follow mode, and expanded run status.
+- Commit: `feat: expose durable run event history`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
@@ -225,4 +245,4 @@ Source: `PLAN.md`
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, durable approval handling, detached worker execution, and stale-lease recovery exist; event inspection and richer operator observability are not implemented yet.
+- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, durable approval handling, detached worker execution, stale-lease recovery, event replay, follow mode, and expanded status exist; security hardening and final operator documentation are not complete yet.

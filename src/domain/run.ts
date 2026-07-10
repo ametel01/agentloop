@@ -66,6 +66,11 @@ export interface TurnRecord {
   promptHash: string;
   startedAt: string;
   finishedAt: string | null;
+  fingerprintBefore: string | null;
+  fingerprintAfter: string | null;
+  responseJson: string | null;
+  usage: RunUsage;
+  errorJson: string | null;
 }
 
 export interface EventRecord {
@@ -76,6 +81,15 @@ export interface EventRecord {
   itemId: string | null;
   payloadJson: string;
   createdAt: string;
+}
+
+export interface LeaseRecord {
+  repoKey: string;
+  runId: RunId;
+  ownerId: string;
+  acquiredAt: string;
+  heartbeatAt: string;
+  expiresAt: string;
 }
 
 export interface RunRecord {

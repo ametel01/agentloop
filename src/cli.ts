@@ -17,14 +17,18 @@ import {
   buildInitialPrompt,
   buildRecoveryPrompt,
 } from "./codex/prompt-builder.ts";
+import { redactJson, redactText } from "./codex/redaction.ts";
 import { buildThreadOptions } from "./codex/thread-options.ts";
 import { AgentloopError, CliUsageError } from "./domain/errors.ts";
 import {
   DEFAULT_RUN_LIMITS,
   type ApprovalRequest,
+  type EventRecord,
+  type LeaseRecord,
   type RunLimits,
   type RunRecord,
   type RunUsage,
+  type TurnRecord,
 } from "./domain/run.ts";
 import { ProductionCommandRunner } from "./infrastructure/command-runner.ts";
 import { NodeFileSystem } from "./infrastructure/filesystem.ts";
@@ -51,6 +55,7 @@ Usage:
   agentloop approve RUN_ID --message TEXT
   agentloop reject RUN_ID --message TEXT
   agentloop worker [--once] [--poll-interval DURATION]
+  agentloop events RUN_ID [--follow] [--json]
   agentloop status [RUN_ID] [--json]
   agentloop cancel RUN_ID [--reason TEXT]
 
@@ -61,6 +66,7 @@ Commands:
   approve  Approve one pending durable human approval and resume the run.
   reject   Reject one pending durable human approval and cancel the run.
   worker   Claim queued or expired recoverable runs and execute them.
+  events   Replay persisted run events in order.
   status   Show durable run status.
   cancel   Cancel a queued run.
 `;
@@ -135,6 +141,8 @@ async function runCliUnsafe(
       return await rejectCommand(commandArgs, dependencies, io);
     case "worker":
       return await workerCommand(commandArgs, dependencies, io);
+    case "events":
+      return await eventsCommand(commandArgs, dependencies, io);
     case "status":
       return await statusCommand(commandArgs, dependencies, io);
     case "cancel":
@@ -419,7 +427,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       fingerprintAfter: null,
       finishedAt: clock.now().toISOString(),
       id: turnId,
-      responseJson: finalText,
+      responseJson: redactText(finalText),
       status: "completed",
       usage,
     });
@@ -445,13 +453,13 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       }
 
       store.createApproval({
-        evidenceJson: JSON.stringify(envelope.evidence),
+        evidenceJson: redactJson(envelope.evidence),
         id: idGenerator.randomId(),
         kind: envelope.approval.kind,
-        operationJson: JSON.stringify(envelope.approval.operation),
-        question: envelope.approval.question,
+        operationJson: redactJson(envelope.approval.operation),
+        question: redactText(envelope.approval.question),
         requestedAt: clock.now().toISOString(),
-        risk: envelope.approval.risk,
+        risk: redactText(envelope.approval.risk),
         runId: updatedRun.id,
       });
       return store.transitionRun({
@@ -459,7 +467,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
         id: updatedRun.id,
         nextStatus: "waiting_approval",
         now: clock.now().toISOString(),
-        reason: envelope.summary,
+        reason: redactText(envelope.summary),
       });
     }
 
@@ -495,10 +503,10 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       id: withProgress.id,
       nextStatus: envelopeStatusToRunStatus(envelope.status),
       now: clock.now().toISOString(),
-      reason: envelope.summary,
+      reason: redactText(envelope.summary),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactText(error instanceof Error ? error.message : String(error));
     store.completeTurn({
       errorJson: JSON.stringify({ message }),
       fingerprintAfter: null,
@@ -527,7 +535,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       return failedRun;
     }
 
-    throw error;
+    throw new Error(message);
   }
 }
 
@@ -820,7 +828,7 @@ async function approveCommand(
   const resolved = store.resolveApproval({
     id: approval.id,
     resolvedAt: clock.now().toISOString(),
-    response: message,
+    response: redactText(message),
     status: "approved",
   });
 
@@ -884,7 +892,7 @@ async function rejectCommand(
   store.resolveApproval({
     id: approval.id,
     resolvedAt: clock.now().toISOString(),
-    response: message,
+    response: redactText(message),
     status: "rejected",
   });
   const cancelled = store.transitionRun({
@@ -982,6 +990,66 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function eventsCommand(
+  args: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<number> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      follow: { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+    },
+    strict: true,
+  });
+
+  if (parsed.positionals.length !== 1) {
+    throw new CliUsageError("Usage: agentloop events RUN_ID [--follow] [--json]");
+  }
+
+  const store = await openRunStore(dependencies);
+  const runId = parsed.positionals[0] ?? "";
+  requireRun(store, runId);
+
+  let afterSequence = 0;
+  let shuttingDown = false;
+  let stopPolling = () => {};
+  const stopped = new Promise<void>((resolve) => {
+    stopPolling = resolve;
+  });
+  const stop = () => {
+    shuttingDown = true;
+    stopPolling();
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+
+  try {
+    while (!shuttingDown) {
+      const events = store.listEvents(runId, afterSequence, 100);
+      for (const event of events) {
+        io.stdout(parsed.values.json ? `${renderEventJson(event)}\n` : renderEventText(event));
+        afterSequence = event.sequence;
+      }
+
+      if (!parsed.values.follow) {
+        return EXIT_CODES.ok;
+      }
+
+      if (events.length === 0) {
+        await Promise.race([sleep(250), stopped]);
+      }
+    }
+
+    return EXIT_CODES.ok;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
 function exactlyOnePendingApproval(store: SqliteRunStore, runId: string): ApprovalRequest {
   const approvals = store.listPendingApprovals(runId);
   if (approvals.length !== 1) {
@@ -1038,12 +1106,8 @@ async function statusCommand(
     throw new CliUsageError(`Run not found: ${runId}`);
   }
 
-  const pendingApprovals = store.listPendingApprovals(run.id);
-  io.stdout(
-    parsed.values.json
-      ? `${JSON.stringify({ ...run, pendingApprovals }, null, 2)}\n`
-      : renderRun(run, pendingApprovals),
-  );
+  const status = buildRunStatus(store, run, dependencies.clock ?? new SystemClock());
+  io.stdout(parsed.values.json ? `${JSON.stringify(status, null, 2)}\n` : renderRunStatus(status));
   return EXIT_CODES.ok;
 }
 
@@ -1158,6 +1222,76 @@ function renderRunList(runs: readonly RunRecord[]): string {
     .join("\n")}\n`;
 }
 
+interface RunStatusDocument extends RunRecord {
+  pendingApprovals: ApprovalRequest[];
+  turns: TurnRecord[];
+  lease: LeaseRecord | null;
+  heartbeatAgeMs: number | null;
+  latestBlocker: unknown;
+}
+
+function buildRunStatus(store: SqliteRunStore, run: RunRecord, clock: Clock): RunStatusDocument {
+  const lease = store.getLeaseForRun(run.id);
+  return {
+    ...run,
+    heartbeatAgeMs:
+      lease === null ? null : Math.max(0, clock.now().getTime() - Date.parse(lease.heartbeatAt)),
+    latestBlocker: latestBlocker(store.listTurns(run.id)),
+    lease,
+    pendingApprovals: store.listPendingApprovals(run.id),
+    turns: store.listTurns(run.id),
+  };
+}
+
+function renderRunStatus(status: RunStatusDocument): string {
+  const lines = [
+    `run: ${status.id}`,
+    `status: ${status.status}`,
+    `harness.status: ${status.status}`,
+    `repo: ${status.repoPath}`,
+    `objective: ${status.objective}`,
+    `thread: ${status.threadId ?? "none"}`,
+    `usage.inputTokens: ${status.usage.inputTokens}`,
+    `usage.cachedInputTokens: ${status.usage.cachedInputTokens}`,
+    `usage.outputTokens: ${status.usage.outputTokens}`,
+    `usage.reasoningTokens: ${status.usage.reasoningTokens}`,
+    `stateFingerprint: ${status.stateFingerprint ?? "none"}`,
+    `noProgressCount: ${status.noProgressCount}`,
+    `consecutiveFailures: ${status.consecutiveFailures}`,
+    `lastError: ${status.lastError ?? "none"}`,
+    `latestBlocker: ${status.latestBlocker === null ? "none" : JSON.stringify(status.latestBlocker)}`,
+    `lease.owner: ${status.lease?.ownerId ?? "none"}`,
+    `lease.expiresAt: ${status.lease?.expiresAt ?? "none"}`,
+    `lease.heartbeatAgeMs: ${status.heartbeatAgeMs ?? "none"}`,
+    `created: ${status.createdAt}`,
+    `updated: ${status.updatedAt}`,
+  ];
+
+  for (const turn of status.turns) {
+    lines.push(
+      `turn: ${turn.turnNumber}`,
+      `turn.id: ${turn.id}`,
+      `turn.kind: ${turn.kind}`,
+      `turn.status: ${turn.status}`,
+      `turn.usage: input=${turn.usage.inputTokens} cached=${turn.usage.cachedInputTokens} output=${turn.usage.outputTokens} reasoning=${turn.usage.reasoningTokens}`,
+    );
+  }
+
+  for (const approval of status.pendingApprovals) {
+    lines.push(
+      `pendingApproval: ${approval.id}`,
+      `approvalKind: ${approval.kind}`,
+      `approvalQuestion: ${approval.question}`,
+      `approvalRisk: ${approval.risk}`,
+      `approvalOperation: ${JSON.stringify(approval.operation)}`,
+      `approvalEvidence: ${JSON.stringify(approval.evidence)}`,
+    );
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}
+
 function renderRun(run: RunRecord, pendingApprovals: readonly ApprovalRequest[] = []): string {
   const nonCachedTokens =
     run.usage.inputTokens + run.usage.outputTokens + run.usage.reasoningTokens;
@@ -1189,6 +1323,129 @@ function renderRun(run: RunRecord, pendingApprovals: readonly ApprovalRequest[] 
 
   lines.push("");
   return lines.join("\n");
+}
+
+function latestBlocker(turns: readonly TurnRecord[]): unknown {
+  for (const turn of [...turns].reverse()) {
+    if (turn.responseJson === null) {
+      continue;
+    }
+
+    const parsed = parseJsonObject(turn.responseJson);
+    if (parsed !== null && "blocker" in parsed) {
+      return parsed.blocker;
+    }
+  }
+
+  return null;
+}
+
+function renderEventJson(event: EventRecord): string {
+  return JSON.stringify({
+    ...event,
+    payload: parseJsonObject(event.payloadJson) ?? event.payloadJson,
+  });
+}
+
+function renderEventText(event: EventRecord): string {
+  const payload = parseJsonObject(event.payloadJson);
+  const prefix = `${event.sequence}\t${event.createdAt}`;
+  if (event.eventType === "thread.started") {
+    return `${prefix}\tharness: thread.started thread=${stringField(payload, "thread_id") ?? "unknown"}\n`;
+  }
+
+  if (event.eventType === "turn.completed") {
+    const usage = objectField(payload, "usage");
+    return `${prefix}\tharness: turn.completed usage=${formatUsagePayload(usage)}\n`;
+  }
+
+  if (event.eventType === "turn.failed" || event.eventType === "error") {
+    return `${prefix}\tharness: ${event.eventType} error=${errorText(payload)}\n`;
+  }
+
+  if (event.eventType === "item.completed") {
+    const item = objectField(payload, "item");
+    const itemType = stringField(item, "type") ?? "unknown";
+    const label = itemTypeLabel(itemType);
+    return `${prefix}\tmodel: ${label} item=${event.itemId ?? "none"} ${itemText(item)}\n`;
+  }
+
+  return `${prefix}\tharness: ${event.eventType}\n`;
+}
+
+function itemTypeLabel(itemType: string): string {
+  if (itemType === "agent_message") {
+    return "agent_message";
+  }
+
+  if (itemType.includes("command")) {
+    return "command_execution";
+  }
+
+  if (itemType.includes("mcp")) {
+    return "mcp_call";
+  }
+
+  if (itemType.includes("file")) {
+    return "file_change";
+  }
+
+  return itemType;
+}
+
+function itemText(item: Record<string, unknown> | null): string {
+  if (item === null) {
+    return "";
+  }
+
+  const text =
+    stringField(item, "text") ?? stringField(item, "message") ?? stringField(item, "name");
+  return text === null ? "" : `text=${text}`;
+}
+
+function errorText(payload: Record<string, unknown> | null): string {
+  return (
+    stringField(payload, "message") ?? stringField(objectField(payload, "error"), "message") ?? ""
+  );
+}
+
+function formatUsagePayload(usage: Record<string, unknown> | null): string {
+  if (usage === null) {
+    return "none";
+  }
+
+  return `input=${numberField(usage, "input_tokens") ?? 0} cached=${numberField(usage, "cached_input_tokens") ?? 0} output=${numberField(usage, "output_tokens") ?? 0} reasoning=${numberField(usage, "reasoning_output_tokens") ?? 0}`;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function objectField(
+  value: Record<string, unknown> | null,
+  field: string,
+): Record<string, unknown> | null {
+  const candidate = value?.[field];
+  return typeof candidate === "object" && candidate !== null
+    ? (candidate as Record<string, unknown>)
+    : null;
+}
+
+function stringField(value: Record<string, unknown> | null, field: string): string | null {
+  const candidate = value?.[field];
+  return typeof candidate === "string" ? candidate : null;
+}
+
+function numberField(value: Record<string, unknown>, field: string): number | null {
+  const candidate = value[field];
+  return typeof candidate === "number" ? candidate : null;
 }
 
 if (import.meta.main) {

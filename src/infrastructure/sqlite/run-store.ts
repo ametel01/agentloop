@@ -5,6 +5,7 @@ import type {
   ApprovalRequest,
   CreateRunInput,
   EventRecord,
+  LeaseRecord,
   RunLimits,
   RunRecord,
   RunStatus,
@@ -62,6 +63,9 @@ export interface RunStore {
   countEvents(runId: string): number;
   countTurns(runId: string): number;
   listRuns(limit: number): RunRecord[];
+  listTurns(runId: string): TurnRecord[];
+  listEvents(runId: string, afterSequence: number, limit: number): EventRecord[];
+  getLeaseForRun(runId: string): LeaseRecord | null;
   transitionRun(input: TransitionRunInput): RunRecord;
   updateSkillFingerprint(input: UpdateSkillFingerprintInput): RunRecord;
   updateProgress(input: UpdateProgressInput): RunRecord;
@@ -293,6 +297,34 @@ export class SqliteRunStore implements RunStore {
       .query<RunRow, [number]>("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?")
       .all(limit)
       .map(mapRun);
+  }
+
+  listTurns(runId: string): TurnRecord[] {
+    return this.database
+      .query<TurnRow, [string]>("SELECT * FROM turns WHERE run_id = ? ORDER BY turn_number ASC")
+      .all(runId)
+      .map(mapTurn);
+  }
+
+  listEvents(runId: string, afterSequence: number, limit: number): EventRecord[] {
+    return this.database
+      .query<EventRow, [string, number, number]>(
+        `
+        SELECT * FROM events
+        WHERE run_id = ? AND sequence > ?
+        ORDER BY sequence ASC
+        LIMIT ?
+      `,
+      )
+      .all(runId, afterSequence, limit)
+      .map(mapEvent);
+  }
+
+  getLeaseForRun(runId: string): LeaseRecord | null {
+    const row = this.database
+      .query<LeaseRow, [string]>("SELECT * FROM leases WHERE run_id = ?")
+      .get(runId);
+    return row === null ? null : mapLease(row);
   }
 
   transitionRun(input: TransitionRunInput): RunRecord {
@@ -787,6 +819,33 @@ interface TurnRow {
   prompt_hash: string;
   started_at: string;
   finished_at: string | null;
+  fingerprint_before: string | null;
+  fingerprint_after: string | null;
+  response_json: string | null;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  error_json: string | null;
+}
+
+interface EventRow {
+  run_id: string;
+  sequence: number;
+  turn_id: string | null;
+  event_type: string;
+  item_id: string | null;
+  payload_json: string;
+  created_at: string;
+}
+
+interface LeaseRow {
+  repo_key: string;
+  run_id: string;
+  owner_id: string;
+  acquired_at: string;
+  heartbeat_at: string;
+  expires_at: string;
 }
 
 function mapRun(row: RunRow): RunRecord {
@@ -824,14 +883,47 @@ function mapRun(row: RunRow): RunRecord {
 
 function mapTurn(row: TurnRow): TurnRecord {
   return {
+    errorJson: row.error_json,
+    fingerprintAfter: row.fingerprint_after,
+    fingerprintBefore: row.fingerprint_before,
     id: row.id,
     runId: row.run_id,
+    responseJson: row.response_json,
     turnNumber: row.turn_number,
     kind: row.kind,
     status: row.status,
     promptHash: row.prompt_hash,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    usage: {
+      cachedInputTokens: row.cached_input_tokens,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      reasoningTokens: row.reasoning_tokens,
+    },
+  };
+}
+
+function mapEvent(row: EventRow): EventRecord {
+  return {
+    createdAt: row.created_at,
+    eventType: row.event_type,
+    itemId: row.item_id,
+    payloadJson: row.payload_json,
+    runId: row.run_id,
+    sequence: row.sequence,
+    turnId: row.turn_id,
+  };
+}
+
+function mapLease(row: LeaseRow): LeaseRecord {
+  return {
+    acquiredAt: row.acquired_at,
+    expiresAt: row.expires_at,
+    heartbeatAt: row.heartbeat_at,
+    ownerId: row.owner_id,
+    repoKey: row.repo_key,
+    runId: row.run_id,
   };
 }
 

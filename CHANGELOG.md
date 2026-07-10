@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add event replay, follow mode, and expanded run status for durable run inspection.
 - Add detached worker execution for queued runs and stale-lease recovery.
 - Add durable human approval checkpoints with approve/reject commands and approval-response resume prompts.
 - Add run safety limits for turn, token, duration, no-progress, heartbeat renewal, and signal cancellation handling.
