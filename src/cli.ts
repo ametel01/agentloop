@@ -2,13 +2,19 @@
 
 import { parseArgs } from "node:util";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
+import type { Usage } from "@openai/codex-sdk";
 
 import { runDoctor, type DoctorDependencies } from "./application/doctor.ts";
 import { resolveStateDir } from "./application/paths.ts";
 import type { Clock, IdGenerator } from "./application/ports.ts";
+import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "./codex/control-envelope.ts";
+import { ProductionCodexRunner, type CodexRunner } from "./codex/client.ts";
+import { agentMessageText, eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
+import { buildInitialPrompt } from "./codex/prompt-builder.ts";
+import { buildThreadOptions } from "./codex/thread-options.ts";
 import { AgentloopError, CliUsageError } from "./domain/errors.ts";
-import { DEFAULT_RUN_LIMITS, type RunLimits, type RunRecord } from "./domain/run.ts";
+import { DEFAULT_RUN_LIMITS, type RunLimits, type RunRecord, type RunUsage } from "./domain/run.ts";
 import { ProductionCommandRunner } from "./infrastructure/command-runner.ts";
 import { NodeFileSystem } from "./infrastructure/filesystem.ts";
 import { SystemClock } from "./infrastructure/clock.ts";
@@ -46,6 +52,7 @@ export interface CliIo {
 
 export interface CliDependencies extends DoctorDependencies {
   clock?: Clock;
+  codexRunner?: CodexRunner;
   idGenerator?: IdGenerator;
 }
 
@@ -165,7 +172,7 @@ async function runCommand(
   }
 
   if (!parsed.values.detach) {
-    throw new CliUsageError("Step 3 supports only detached runs. Add --detach.");
+    io.stdout("Starting foreground run. Codex events will stream below.\n");
   }
 
   const approvalMode = parsed.values["approval-mode"];
@@ -200,8 +207,178 @@ async function runCommand(
     now,
   });
 
-  io.stdout(`${run.id}\n`);
+  if (parsed.values.detach) {
+    io.stdout(`${run.id}\n`);
+    return EXIT_CODES.ok;
+  }
+
+  const completed = await executeForegroundRun(run, store, dependencies, io);
+  io.stdout(renderRun(completed));
   return EXIT_CODES.ok;
+}
+
+async function executeForegroundRun(
+  queuedRun: RunRecord,
+  store: SqliteRunStore,
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<RunRecord> {
+  const clock = dependencies.clock ?? new SystemClock();
+  const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
+  const ownerId = `${hostname()}:${process.pid}:${idGenerator.randomId()}`;
+  const acquiredAt = clock.now();
+  const expiresAt = new Date(acquiredAt.getTime() + queuedRun.limits.leaseTtlMs);
+  store.acquireLease({
+    acquiredAt: acquiredAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    ownerId,
+    repoKey: queuedRun.repoKey,
+    runId: queuedRun.id,
+  });
+
+  let runningRun = store.transitionRun({
+    expectedStatus: "queued",
+    id: queuedRun.id,
+    nextStatus: "running",
+    now: clock.now().toISOString(),
+    reason: "foreground run started",
+  });
+  const turnId = idGenerator.randomId();
+  const prompt = buildInitialPrompt(runningRun);
+  store.createTurn({
+    fingerprintBefore: null,
+    id: turnId,
+    kind: "initial",
+    promptHash: sha256Hex(prompt),
+    runId: runningRun.id,
+    startedAt: clock.now().toISOString(),
+    status: "running",
+    turnNumber: runningRun.turnsCompleted + 1,
+  });
+
+  let finalText: string | null = null;
+  let usage: RunUsage = zeroUsage();
+
+  try {
+    const runner = dependencies.codexRunner ?? new ProductionCodexRunner();
+    const events = await runner.runStreamed({
+      outputSchema: CONTROL_ENVELOPE_SCHEMA,
+      prompt,
+      threadOptions: buildThreadOptions({
+        model: runningRun.model,
+        reasoningEffort: runningRun.reasoningEffort,
+        repoPath: runningRun.repoPath,
+        worktreeRoot: runningRun.worktreeRoot,
+      }),
+    });
+
+    for await (const event of events) {
+      const createdAt = clock.now().toISOString();
+      if (event.type === "thread.started") {
+        store.recordThreadStarted({
+          createdAt,
+          eventType: event.type,
+          itemId: null,
+          payloadJson: eventPayloadJson(event),
+          runId: runningRun.id,
+          threadId: event.thread_id,
+          turnId,
+        });
+      } else {
+        store.appendEvent({
+          createdAt,
+          eventType: event.type,
+          itemId: eventItemId(event),
+          payloadJson: eventPayloadJson(event),
+          runId: runningRun.id,
+          turnId,
+        });
+      }
+
+      io.stdout(`event: ${event.type}\n`);
+      finalText = agentMessageText(event) ?? finalText;
+
+      if (event.type === "turn.completed") {
+        usage = mapUsage(event.usage);
+      }
+
+      if (event.type === "turn.failed" || event.type === "error") {
+        throw new Error(event.type === "turn.failed" ? event.error.message : event.message);
+      }
+    }
+
+    if (finalText === null) {
+      throw new Error("Codex turn completed without an agent_message control envelope");
+    }
+
+    const envelope = parseControlEnvelope(finalText);
+    store.completeTurn({
+      errorJson: null,
+      fingerprintAfter: null,
+      finishedAt: clock.now().toISOString(),
+      id: turnId,
+      responseJson: finalText,
+      status: "completed",
+      usage,
+    });
+    runningRun = store.updateUsage({
+      id: runningRun.id,
+      now: clock.now().toISOString(),
+      usageDelta: usage,
+    });
+    return store.transitionRun({
+      expectedStatus: "running",
+      id: runningRun.id,
+      nextStatus: envelopeStatusToRunStatus(envelope.status),
+      now: clock.now().toISOString(),
+      reason: envelope.summary,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    store.completeTurn({
+      errorJson: JSON.stringify({ message }),
+      fingerprintAfter: null,
+      finishedAt: clock.now().toISOString(),
+      id: turnId,
+      responseJson: finalText,
+      status: "failed",
+      usage,
+    });
+    store.transitionRun({
+      expectedStatus: "running",
+      id: runningRun.id,
+      nextStatus: "failed",
+      now: clock.now().toISOString(),
+      reason: message,
+    });
+    throw error;
+  } finally {
+    store.releaseLease(queuedRun.repoKey, ownerId);
+  }
+}
+
+function envelopeStatusToRunStatus(
+  status: "complete" | "continue" | "waiting_approval" | "externally_blocked",
+) {
+  return status === "continue" ? "continuing" : status;
+}
+
+function mapUsage(usage: Usage): RunUsage {
+  return {
+    cachedInputTokens: usage.cached_input_tokens,
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    reasoningTokens: usage.reasoning_output_tokens,
+  };
+}
+
+function zeroUsage(): RunUsage {
+  return {
+    cachedInputTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+  };
 }
 
 async function statusCommand(

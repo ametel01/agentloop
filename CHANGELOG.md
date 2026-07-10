@@ -9,5 +9,6 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add foreground Codex dev-team execution with streamed event persistence and strict control-envelope validation.
 - Add durable queued runs, SQLite-backed status inspection, and queued-run cancellation.
 - Add the `agentloop doctor` preflight command for repository, toolchain, GitHub, SDK, skill, state, and trust-boundary checks.

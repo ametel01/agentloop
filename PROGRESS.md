@@ -30,7 +30,7 @@ Source: `PLAN.md`
 - [x] Step 1: Toolchain and Quality Gates Setup
 - [x] Step 2: Domain Contracts and Doctor Command
 - [x] Step 3: Durable Ledger and Run Lifecycle Commands
-- [ ] Step 4: Codex SDK Adapter and Foreground Coordinator Run
+- [x] Step 4: Codex SDK Adapter and Foreground Coordinator Run
 - [ ] Step 5: Continuation, Resume, and Crash Recovery
 - [ ] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
 - [ ] Step 7: Durable Human Approval Flow
@@ -41,10 +41,10 @@ Source: `PLAN.md`
 
 ## Current Status
 
-- Completed step: Step 3
-- Current implementation focus: Step 4
-- Next step: Step 4: Codex SDK Adapter and Foreground Coordinator Run
-- Last completed commit: Step 3, `feat: persist run lifecycle in sqlite`
+- Completed step: Step 4
+- Current implementation focus: Step 5
+- Next step: Step 5: Continuation, Resume, and Crash Recovery
+- Last completed commit: Step 4, `feat: run codex dev team in foreground`
 
 ## Validation Log
 
@@ -115,11 +115,34 @@ Source: `PLAN.md`
 - Changelog: Added entry for durable queued runs, status, and cancellation.
 - Commit: `feat: persist run lifecycle in sqlite`
 
+### Step 4: Codex SDK Adapter and Foreground Coordinator Run
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 17 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+  - Source check confirmed `src/codex` and `src/cli.ts` do not hardcode role-skill names such as builder/checker/reviewer agents; the fixed prompt only invokes `$codex-dev-team-goal`.
+- Adapter behavior:
+  - Added production `@openai/codex-sdk` streaming adapter and a `CodexRunner` port for fake-backed default tests.
+  - Builds production thread options with workspace-write sandbox, generated worktree root, network enabled, web search disabled, approval policy never, and no model/reasoning override keys when omitted.
+  - Adds the fixed initial prompt template with delimited target work and required final control envelope.
+  - Adds strict control-envelope schema and independent parser validation.
+  - Persists streamed SDK events with monotonic sequence numbers, redacted payload JSON, durable `thread_id` on `thread.started`, usage accounting, and terminal state transitions.
+  - Marks malformed envelopes and stream failures as failed runs.
+  - Adds `test/live/sdk-smoke.test.ts`, skipped unless `AGENTLOOP_LIVE=1`, for start/resume SDK compatibility without GitHub writes.
+- Live SDK smoke test: skipped because Step 4 validation did not explicitly authorize model calls; run manually with `AGENTLOOP_LIVE=1 bun test test/live --timeout 120000`.
+- Changelog: Added entry for foreground Codex dev-team execution and streamed progress.
+- Commit: `feat: run codex dev team in foreground`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
-- SDK compatibility: not tested yet.
+- SDK compatibility: production SDK import and default fake-backed streaming adapter tests pass; opt-in live start/resume smoke exists but was skipped.
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
-- Live SDK smoke test: not run; opt-in Step 4 validation only.
+- Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: no Codex execution, event streaming, resume, or recovery exists yet.
+- Known durability limitations: foreground initial Codex execution exists; continuation, resume, crash recovery, budgets, progress fingerprinting, and durable approvals are not implemented yet.

@@ -51,6 +51,7 @@ export interface RunStore {
   createTurn(input: CreateTurnInput): TurnRecord;
   completeTurn(input: CompleteTurnInput): TurnRecord;
   appendEvent(input: AppendEventInput): EventRecord;
+  recordThreadStarted(input: RecordThreadStartedInput): EventRecord;
   createApproval(input: CreateApprovalInput): ApprovalRequest;
   acquireLease(input: AcquireLeaseInput): void;
   releaseLease(repoKey: string, ownerId: string): void;
@@ -98,6 +99,10 @@ export interface AppendEventInput {
   itemId: string | null;
   payloadJson: string;
   createdAt: string;
+}
+
+export interface RecordThreadStartedInput extends AppendEventInput {
+  threadId: string;
 }
 
 export interface CreateApprovalInput {
@@ -242,7 +247,10 @@ export class SqliteRunStore implements RunStore {
           SET status = ?,
               updated_at = ?,
               finished_at = CASE WHEN ? IN ('complete', 'cancelled') THEN ? ELSE finished_at END,
-              last_error = ?
+              last_error = CASE
+                WHEN ? IN ('failed', 'cancelled', 'stuck', 'budget_exhausted') THEN ?
+                ELSE last_error
+              END
           WHERE id = ? AND status = ?
         `,
         )
@@ -251,6 +259,7 @@ export class SqliteRunStore implements RunStore {
           input.now,
           input.nextStatus,
           input.now,
+          input.nextStatus,
           input.reason,
           input.id,
           input.expectedStatus,
@@ -284,6 +293,7 @@ export class SqliteRunStore implements RunStore {
             total_cached_input_tokens = total_cached_input_tokens + ?,
             total_output_tokens = total_output_tokens + ?,
             total_reasoning_tokens = total_reasoning_tokens + ?,
+            turns_completed = turns_completed + 1,
             updated_at = ?
         WHERE id = ?
       `,
@@ -415,6 +425,52 @@ export class SqliteRunStore implements RunStore {
 
       this.database.run("COMMIT");
       return { ...input, sequence };
+    } catch (error) {
+      this.database.run("ROLLBACK");
+      throw error;
+    }
+  }
+
+  recordThreadStarted(input: RecordThreadStartedInput): EventRecord {
+    this.database.run("BEGIN IMMEDIATE");
+    try {
+      const last = this.database
+        .query<{ sequence: number }, [string]>(
+          "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM events WHERE run_id = ?",
+        )
+        .get(input.runId);
+      const sequence = (last?.sequence ?? 0) + 1;
+
+      this.database
+        .query("UPDATE runs SET thread_id = ?, updated_at = ? WHERE id = ?")
+        .run(input.threadId, input.createdAt, input.runId);
+      this.database
+        .query(
+          `
+          INSERT INTO events(run_id, sequence, turn_id, event_type, item_id, payload_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          input.runId,
+          sequence,
+          input.turnId,
+          input.eventType,
+          input.itemId,
+          input.payloadJson,
+          input.createdAt,
+        );
+
+      this.database.run("COMMIT");
+      return {
+        createdAt: input.createdAt,
+        eventType: input.eventType,
+        itemId: input.itemId,
+        payloadJson: input.payloadJson,
+        runId: input.runId,
+        sequence,
+        turnId: input.turnId,
+      };
     } catch (error) {
       this.database.run("ROLLBACK");
       throw error;
