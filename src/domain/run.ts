@@ -23,6 +23,17 @@ export interface RunLimits {
   eventStallWarningMs: number;
 }
 
+export const DEFAULT_RUN_LIMITS: RunLimits = {
+  maxOuterTurns: 25,
+  maxTotalTokens: 5_000_000,
+  maxWallDurationMs: 8 * 60 * 60 * 1000,
+  maxConsecutiveTurnFailures: 2,
+  maxNoProgressTurns: 2,
+  leaseTtlMs: 120_000,
+  leaseRenewIntervalMs: 30_000,
+  eventStallWarningMs: 30 * 60 * 1000,
+};
+
 export interface RunUsage {
   inputTokens: number;
   cachedInputTokens: number;
@@ -42,3 +53,77 @@ export interface ApprovalRequest {
   evidence: unknown;
   status: ApprovalStatus;
 }
+
+export interface TurnRecord {
+  id: string;
+  runId: RunId;
+  turnNumber: number;
+  kind: string;
+  status: string;
+  promptHash: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface EventRecord {
+  runId: RunId;
+  sequence: number;
+  turnId: string | null;
+  eventType: string;
+  itemId: string | null;
+  payloadJson: string;
+  createdAt: string;
+}
+
+export interface RunRecord {
+  id: RunId;
+  repoPath: string;
+  repoKey: string;
+  objective: string;
+  objectiveHash: string;
+  threadId: string | null;
+  status: RunStatus;
+  model: string | null;
+  reasoningEffort: string | null;
+  approvalMode: "agent-approved" | "human-merge";
+  worktreeRoot: string;
+  skillFingerprint: string;
+  limits: RunLimits;
+  turnsCompleted: number;
+  usage: RunUsage;
+  noProgressCount: number;
+  consecutiveFailures: number;
+  stateFingerprint: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastError: string | null;
+}
+
+export interface CreateRunInput {
+  id: RunId;
+  repoPath: string;
+  repoKey: string;
+  objective: string;
+  objectiveHash: string;
+  status: "queued";
+  model: string | null;
+  reasoningEffort: string | null;
+  approvalMode: "agent-approved" | "human-merge";
+  worktreeRoot: string;
+  skillFingerprint: string;
+  limits: RunLimits;
+  now: string;
+}
+
+export const OPEN_RUN_STATUSES: readonly RunStatus[] = [
+  "queued",
+  "running",
+  "continuing",
+  "waiting_approval",
+  "externally_blocked",
+  "stuck",
+  "budget_exhausted",
+  "failed",
+];

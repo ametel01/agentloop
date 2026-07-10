@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 import type { CommandRunner, FileSystem } from "./ports.ts";
+import { resolveStateDir } from "./paths.ts";
 import type { DoctorCheck, DoctorReport, SkillManifestEntry } from "../domain/doctor.ts";
 
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -134,18 +135,6 @@ export async function runDoctor(
     skillManifest,
     checks,
   };
-}
-
-function resolveStateDir(home: string, env: NodeJS.ProcessEnv): string {
-  if (env.AGENTLOOP_STATE_DIR !== undefined && env.AGENTLOOP_STATE_DIR !== "") {
-    return resolve(env.AGENTLOOP_STATE_DIR);
-  }
-
-  if (env.XDG_STATE_HOME !== undefined && env.XDG_STATE_HOME !== "") {
-    return resolve(env.XDG_STATE_HOME, "agentloop");
-  }
-
-  return resolve(home, ".local", "state", "agentloop");
 }
 
 async function safeRealpath(fileSystem: FileSystem, path: string): Promise<string> {

@@ -29,7 +29,7 @@ Source: `PLAN.md`
 - [x] Step 0: Progress and Changelog Tracking Setup
 - [x] Step 1: Toolchain and Quality Gates Setup
 - [x] Step 2: Domain Contracts and Doctor Command
-- [ ] Step 3: Durable Ledger and Run Lifecycle Commands
+- [x] Step 3: Durable Ledger and Run Lifecycle Commands
 - [ ] Step 4: Codex SDK Adapter and Foreground Coordinator Run
 - [ ] Step 5: Continuation, Resume, and Crash Recovery
 - [ ] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
@@ -41,10 +41,10 @@ Source: `PLAN.md`
 
 ## Current Status
 
-- Completed step: Step 2
-- Current implementation focus: Step 3
-- Next step: Step 3: Durable Ledger and Run Lifecycle Commands
-- Last completed commit: Step 2, `feat: add repository and skill preflight`
+- Completed step: Step 3
+- Current implementation focus: Step 4
+- Next step: Step 4: Codex SDK Adapter and Foreground Coordinator Run
+- Last completed commit: Step 3, `feat: persist run lifecycle in sqlite`
 
 ## Validation Log
 
@@ -93,11 +93,33 @@ Source: `PLAN.md`
 - Changelog: Added entry for `agentloop doctor`.
 - Commit: `feat: add repository and skill preflight`
 
+### Step 3: Durable Ledger and Run Lifecycle Commands
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 12 tests.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+  - Temporary Git repository smoke passed with `run --detach`, `status --json` from a separate CLI process, `cancel --reason`, and `status --json` confirming `cancelled`.
+- Ledger behavior:
+  - SQLite Migration 1 creates `runs`, `turns`, `events`, `approvals`, `leases`, indexes, and the partial unique open-run index.
+  - Database initialization applies WAL, foreign keys, busy timeout, synchronous normal, state directory mode `0700`, and database file mode `0600`.
+  - `run --detach` requires `--trust-repo`, runs doctor preflight, records a queued run, persists the skill fingerprint, objective hash, repository key, limits, and worktree root, and does not instantiate Codex.
+  - `status [RUN_ID] [--json]` reads durable state across CLI invocations.
+  - `cancel RUN_ID [--reason]` transitions only queued runs to `cancelled`.
+  - Store tests cover migration idempotence, future schema rejection, duplicate open-run conflict, invalid transition rejection, permission modes, and conditional lease release.
+- Migration version: 1
+- Changelog: Added entry for durable queued runs, status, and cancellation.
+- Commit: `feat: persist run lifecycle in sqlite`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
 - SDK compatibility: not tested yet.
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: not run; opt-in Step 4 validation only.
-- Migration version: none yet.
-- Known durability limitations: no harness implementation exists yet.
+- Migration version: 1.
+- Known durability limitations: no Codex execution, event streaming, resume, or recovery exists yet.
