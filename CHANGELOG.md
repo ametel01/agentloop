@@ -20,6 +20,10 @@ and this project adheres to Semantic Versioning.
 - Add durable queued runs, SQLite-backed status inspection, and queued-run cancellation.
 - Add the `agentloop doctor` preflight command for repository, toolchain, GitHub, SDK, skill, state, and trust-boundary checks.
 
+### Changed
+
+- Include the durable Agentloop run ID in coordinator prompt headers for GitHub claim and recovery correlation.
+
 ### Fixed
 
 - Make approval and blocker control-envelope fields valid strict Structured Outputs schemas.

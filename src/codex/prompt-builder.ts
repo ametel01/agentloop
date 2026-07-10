@@ -52,6 +52,7 @@ function promptHeader(run: RunRecord): string {
 
 Repository: ${run.repoPath}
 Worktree root: ${run.worktreeRoot}
+Run ID: ${run.id}
 Merge policy: ${run.approvalMode}
 Remaining outer turns: ${run.limits.maxOuterTurns - run.turnsCompleted}
 Remaining non-cached tokens: ${run.limits.maxTotalTokens - totalNonCachedTokens(run)}

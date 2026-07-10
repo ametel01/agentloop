@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
+import {
+  buildApprovalResponsePrompt,
+  buildContinuationPrompt,
+  buildInitialPrompt,
+  buildRecoveryPrompt,
+} from "../../src/codex/prompt-builder.ts";
 import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "../../src/codex/control-envelope.ts";
 import { buildThreadOptions } from "../../src/codex/thread-options.ts";
+import { DEFAULT_RUN_LIMITS, type RunRecord } from "../../src/domain/run.ts";
 
 describe("Codex contracts", () => {
   test("omits model overrides when not supplied", () => {
@@ -123,7 +130,62 @@ describe("Codex contracts", () => {
       "https://github.com/example/repo/pull/123",
     ]);
   });
+
+  test("adds durable run identity to every coordinator prompt header", () => {
+    const run = createRunRecord();
+    const prompts = [
+      buildInitialPrompt(run),
+      buildContinuationPrompt(run),
+      buildRecoveryPrompt(run, "operator context"),
+      buildApprovalResponsePrompt(run, "approval-1", "approved"),
+    ];
+
+    for (const prompt of prompts) {
+      expect(countOccurrences(prompt, "Run ID: run-123")).toBe(1);
+      expect(prompt.indexOf("Run ID: run-123")).toBeLessThan(prompt.indexOf("<target_work>"));
+      expect(prompt).not.toContain("process.env");
+      expect(prompt).not.toContain("OPENAI_API_KEY");
+      expect(prompt).not.toContain("GITHUB_TOKEN");
+    }
+  });
 });
+
+function createRunRecord(): RunRecord {
+  return {
+    approvalMode: "agent-approved",
+    consecutiveFailures: 0,
+    createdAt: "2026-07-10T00:00:00.000Z",
+    finishedAt: null,
+    id: "run-123",
+    lastError: null,
+    limits: DEFAULT_RUN_LIMITS,
+    model: null,
+    noProgressCount: 0,
+    objective: "Close dispatched issue #12.",
+    objectiveHash: "objective-hash",
+    reasoningEffort: null,
+    repoKey: "repo-key",
+    repoPath: "/repo",
+    skillFingerprint: "skill-fingerprint",
+    startedAt: null,
+    stateFingerprint: null,
+    status: "queued",
+    threadId: "thread-123",
+    turnsCompleted: 0,
+    updatedAt: "2026-07-10T00:00:00.000Z",
+    usage: {
+      cachedInputTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+    },
+    worktreeRoot: "/worktrees/repo",
+  };
+}
+
+function countOccurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
 
 function assertStrictSchema(value: unknown, path: string): void {
   if (!isRecord(value)) {

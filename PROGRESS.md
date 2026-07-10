@@ -15,7 +15,7 @@
 - [x] Step 0: Progress and changelog tracking setup.
 - [x] Step 1: Ready-issue discovery and scope contract.
 - [x] Step 2: Idempotent dispatch CLI and durable queueing.
-- [ ] Step 3: Durable run identity in coordinator prompts.
+- [x] Step 3: Durable run identity in coordinator prompts.
 - [ ] Step 4: GitHub-visible claim protocol in installed skills.
 - [ ] Step 5: Operator polling, security, and recovery documentation.
 - [ ] Step 6: Final acceptance and `/goal` closure evidence.
@@ -31,8 +31,8 @@
 
 ## Current Status
 
-- Status: Step 2 complete.
-- Next step: begin Step 3 durable run identity in coordinator prompts.
+- Status: Step 3 complete.
+- Next step: begin Step 4 GitHub-visible claim protocol in installed skills.
 
 ## Update Rules
 
@@ -50,4 +50,7 @@
 - 2026-07-10: Step 1 Agentloop commit: `65fe7f1` (`feat: add ready issue discovery contract`).
 - 2026-07-10: Step 2 added `agentloop dispatch`, stable text/JSON outcomes, shared queued-run creation, open-run idempotency lookup, and fake-backed CLI/store/security/lifecycle coverage.
 - 2026-07-10: Step 2 validation passed: targeted dispatch CLI/store/security tests, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, and `git diff --check`.
-- 2026-07-10: Step 2 Agentloop commit subject: `feat: queue label scoped agentloop runs`.
+- 2026-07-10: Step 2 Agentloop commit: `0e12b56` (`feat: queue label scoped agentloop runs`).
+- 2026-07-10: Step 3 added durable run IDs to every coordinator prompt header and covered initial, continuation, recovery, and approval-response prompt construction.
+- 2026-07-10: Step 3 validation passed: targeted prompt/foreground tests, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, and `git diff --check`.
+- 2026-07-10: Step 3 Agentloop commit subject: `feat: expose run identity to coordinator turns`.
