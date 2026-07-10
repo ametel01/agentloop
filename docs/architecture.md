@@ -9,6 +9,27 @@ Agentloop is intentionally thin. It does not implement team roles, issue depende
 3. Codex adapter translates a run into `@openai/codex-sdk` thread options and streams SDK events.
 4. Codex coordinator receives fixed prompts that invoke `$codex-dev-team-goal`; installed skills own repository semantic state.
 
+## Label Dispatch Boundary
+
+`agentloop dispatch` is a local repository-level dispatcher. It discovers open GitHub issues labeled `agentloop:ready`, validates the fixed protocol labels, and queues exactly one durable run for the current ready set. It does not start Codex, implement issue semantics, mutate claim labels, or run a scheduler.
+
+Agentloop owns:
+
+- doctor/trust preflight before dispatch
+- deterministic ready-issue discovery through structured `gh` arguments
+- stable text/JSON outcomes for `dry_run`, `queued`, `no_ready_issues`, and `already_active`
+- repository singleton idempotency through the open-run constraint
+- the scope-only queued objective containing the dispatch marker plus issue numbers and URLs
+- the durable run ID in coordinator prompt headers
+
+Installed skills own:
+
+- GitHub claim comments and `agentloop:running`/`agentloop:blocked` mutation order
+- same-run recovery and different-run refusal
+- issue/PR reconciliation, existing-PR reuse, dependency routing, role assignment, merge closure, and transient-label cleanup
+
+Discovery producers remain outside Agentloop. Health, UX, security, Hallmark, telemetry, and churn producers may create or enrich issues in future plans, but they do not apply `agentloop:ready` or launch implementation in this slice.
+
 ## State Machine
 
 Persisted run states:
@@ -64,6 +85,8 @@ If SDK events exist but no durable thread ID was recorded, explicit resume is re
 ## Prompts And Skills
 
 Prompt templates are fixed for initial, continuation, recovery, and approval-response turns. User objective and operator messages are delimited as data. Required skill fingerprints are recorded at run creation; resume blocks for approval if installed skill content changed.
+
+Prompt headers include the durable Agentloop run ID so installed skills can publish `[agentloop run:<RUN_ID>]` claim evidence and recover same-run work without trusting issue body content.
 
 ## Leases And Budgets
 

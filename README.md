@@ -33,6 +33,7 @@ The command is idempotent, so rerun it after local changes. If it updates your s
 
 ```text
 agentloop doctor --repo PATH [--json]
+agentloop dispatch --repo PATH --trust-repo [--dry-run] [--json]
 agentloop run --repo PATH --goal TEXT --trust-repo [--detach] [--model MODEL]
 agentloop resume RUN_ID [--message TEXT] [--accept-skill-change]
 agentloop approve RUN_ID --message TEXT
@@ -61,6 +62,26 @@ bun src/cli.ts doctor --repo /path/to/repo --json
 
 Doctor verifies Git root resolution, Codex CLI availability, SDK import compatibility, GitHub CLI availability/authentication, writable state/worktree roots, required skill files, and repository-local instruction/configuration surfaces. Warnings do not block execution, but they identify trust surfaces the operator accepts with `--trust-repo`.
 
+## Label Dispatch
+
+`dispatch` is the polling-safe entry point for issue-tracker-authorized implementation:
+
+```bash
+bun dist/cli.js dispatch --repo /path/to/repo --trust-repo
+bun dist/cli.js dispatch --repo /path/to/repo --trust-repo --dry-run
+bun dist/cli.js dispatch --repo /path/to/repo --trust-repo --json
+```
+
+Protocol labels are fixed:
+
+- `agentloop:ready`: a human approved the issue for autonomous implementation.
+- `agentloop:running`: a specific Agentloop run owns or reconciles the issue.
+- `agentloop:blocked`: a run hit a terminal human or external blocker.
+
+`dispatch` runs doctor, verifies all three labels exist, reads open `agentloop:ready` issues, and queues one repository-level run for the existing worker. It never invokes Codex directly. `no_ready_issues` and `already_active` are successful no-op outcomes for scheduled polling. `--dry-run` reports the exact issue numbers that would be queued without opening SQLite or mutating GitHub.
+
+The queued objective stores only the immutable dispatch marker and sorted issue numbers/URLs. Issue titles, bodies, comments, and customer data are not persisted by dispatch.
+
 ## Foreground Runs
 
 ```bash
@@ -81,6 +102,7 @@ Queue without executing:
 
 ```bash
 bun src/cli.ts run --repo /path/to/repo --goal "Run the team queue" --trust-repo --detach
+bun dist/cli.js dispatch --repo /path/to/repo --trust-repo
 ```
 
 Process queued or recoverable runs:
@@ -91,6 +113,8 @@ bun src/cli.ts worker --once
 ```
 
 The worker atomically claims the oldest queued run first, then expired active leases for `running` or `continuing` runs. It never auto-claims waiting approval, externally blocked, stuck, exhausted, failed, cancelled, or complete runs.
+
+Dispatched runs execute through the same worker path as `run --detach`; keep one worker supervised for the state directory used by dispatch.
 
 ## Status And Events
 

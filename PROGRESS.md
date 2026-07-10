@@ -17,7 +17,7 @@
 - [x] Step 2: Idempotent dispatch CLI and durable queueing.
 - [x] Step 3: Durable run identity in coordinator prompts.
 - [x] Step 4: GitHub-visible claim protocol in installed skills.
-- [ ] Step 5: Operator polling, security, and recovery documentation.
+- [x] Step 5: Operator polling, security, and recovery documentation.
 - [ ] Step 6: Final acceptance and `/goal` closure evidence.
 
 ## Baseline
@@ -31,8 +31,8 @@
 
 ## Current Status
 
-- Status: Step 4 complete.
-- Next step: begin Step 5 operator polling, security, and recovery documentation.
+- Status: Step 5 complete.
+- Next step: begin Step 6 final acceptance and `/goal` closure evidence.
 
 ## Update Rules
 
@@ -58,4 +58,7 @@
 - 2026-07-10: Step 4 validation passed: `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json`, `git -C /Users/alexmetelli/.agents/skills diff --check`, `git -C /Users/alexmetelli/.agents/skills diff --cached --check`, `bun dist/cli.js doctor --repo . --json`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`.
 - 2026-07-10: Step 4 installed-skill fingerprint from doctor: `e83051cb25937423435cf96d6d8861ac05ff818cae553fd279e594ef0e1cb087`. Existing runs with prior fingerprints must use the existing skill-change approval or `--accept-skill-change` flow before resume.
 - 2026-07-10: Step 4 skills-repo note: pre-existing unstaged edits remain in `agent-team-status-protocol/SKILL.md`, `codex-dev-team-goal/SKILL.md`, and `team-coordinator/SKILL.md`; only the dispatch protocol hunk and eval case were committed.
-- 2026-07-10: Step 4 Agentloop commit subject: `docs: record dispatch claim integration`.
+- 2026-07-10: Step 4 Agentloop commit: `b47e474` (`docs: record dispatch claim integration`).
+- 2026-07-10: Step 5 documented dispatch syntax, fixed labels, dry-run/JSON output, worker handoff, polling no-op states, label setup, `launchd` shape, claim recovery, skill-fingerprint resume handling, and dispatch security boundaries.
+- 2026-07-10: Step 5 validation passed: built CLI help/content checks, `rg` documentation checks, `git diff --check`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`.
+- 2026-07-10: Step 5 Agentloop commit subject: `docs: document label dispatch operations`.

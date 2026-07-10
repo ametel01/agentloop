@@ -9,11 +9,19 @@ Agentloop is a local orchestration harness for Codex. It makes autonomous work m
 - The harness verifies and warns about repository-local instruction/configuration surfaces such as `AGENTS.md`, Codex config, MCP config, Git hooks, scripts, binary directories, Makefiles, package manifests, and GitHub workflows.
 - Agentloop does not store GitHub or OpenAI credentials. Operators should use least-privilege host credentials for repositories they run.
 
+## Dispatch Scope
+
+GitHub issue content is untrusted repository-adjacent input. `dispatch` persists only sorted issue numbers, canonical issue URLs, the immutable dispatch marker, and normal run metadata. It does not persist issue titles, bodies, comments, customer PII, telemetry payloads, session replay contents, payment data, provider credentials, full authentication output, or process environments.
+
+`agentloop:ready` is the human authorization boundary for implementation. Discovery producers, webhooks, hosted schedulers, telemetry ingestion, and automatic ready-label application are intentionally deferred.
+
+The installed `codex-dev-team-goal` skill owns claim comments and label mutations after the worker starts the queued run. Agentloop TypeScript does not contain GitHub label mutation policy.
+
 ## Command Execution
 
 - Harness subprocesses use structured command/argument arrays and explicit timeouts. User goal text, approval messages, and run IDs are not interpolated into shell command strings.
 - The production command runner invokes `Bun.spawn([command, ...args])`; no `sh -c` path is used by the harness.
-- Repository commands used for preflight and fingerprinting run with bounded timeouts and fail closed when required tools are missing.
+- Repository commands used for preflight, dispatch discovery, and fingerprinting run with bounded timeouts and fail closed when required tools are missing.
 
 ## Persistence And Redaction
 
