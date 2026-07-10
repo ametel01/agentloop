@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Security
+
+- Harden CLI input, secret redaction, repository surface warnings, and fail-closed state handling.
+
 ### Added
 
 - Add event replay, follow mode, and expanded run status for durable run inspection.

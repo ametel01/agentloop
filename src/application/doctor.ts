@@ -354,8 +354,12 @@ async function repoSurfaceChecks(repoPath: string, fileSystem: FileSystem): Prom
     "AGENTS.md",
     ".codex/config.toml",
     ".codex/mcp.json",
+    ".git/hooks",
     ".mcp.json",
+    "Makefile",
     "package.json",
+    "scripts",
+    "bin",
     "bunfig.toml",
     ".github/workflows",
   ];

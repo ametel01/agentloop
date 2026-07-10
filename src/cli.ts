@@ -94,11 +94,11 @@ export async function runCli(
     return await runCliUnsafe(args, dependencies, io);
   } catch (error) {
     if (error instanceof AgentloopError) {
-      io.stderr(`${error.message}\n`);
+      io.stderr(`${redactText(error.message)}\n`);
       return error.exitCode;
     }
 
-    const message = error instanceof Error ? error.message : String(error);
+    const message = redactText(error instanceof Error ? error.message : String(error));
     io.stderr(`${message}\n`);
     return EXIT_CODES.internal;
   }

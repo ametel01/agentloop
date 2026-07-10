@@ -36,15 +36,15 @@ Source: `PLAN.md`
 - [x] Step 7: Durable Human Approval Flow
 - [x] Step 8: Detached Worker and Lease Recovery
 - [x] Step 9: Event Inspection and Operator Observability
-- [ ] Step 10: Security and Failure-Mode Hardening
+- [x] Step 10: Security and Failure-Mode Hardening
 - [ ] Step 11: Documentation, CI, and Final Acceptance
 
 ## Current Status
 
-- Completed step: Step 9
-- Current implementation focus: Step 10
-- Next step: Step 10: Security and Failure-Mode Hardening
-- Last completed commit: Step 9, `feat: expose durable run event history`
+- Completed step: Step 10
+- Current implementation focus: Step 11
+- Next step: Step 11: Documentation, CI, and Final Acceptance
+- Last completed commit: Step 10, `security: harden harness execution boundaries`
 
 ## Validation Log
 
@@ -238,6 +238,29 @@ Source: `PLAN.md`
 - Changelog: Added entry for event replay, follow mode, and expanded run status.
 - Commit: `feat: expose durable run event history`
 
+### Step 10: Security and Failure-Mode Hardening
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 47 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+  - `bun audit` passed with no vulnerabilities found.
+- Security scenarios:
+  - Adversarial repository paths with shell metacharacters, traversal, and newlines are passed as structured command arguments with explicit timeouts.
+  - Missing Codex tooling fails preflight before the Codex runner starts.
+  - Repository hooks, MCP config, scripts, binary directories, Makefiles, package manifests, and workflow surfaces emit doctor warnings.
+  - Malicious approval messages are not passed to command arguments and persist with token-shaped secrets redacted.
+  - Invalid run IDs and token-shaped usage errors redact secrets in terminal output.
+  - Corrupt or unwritable SQLite state fails closed instead of running without durable state.
+  - Secret-shaped stream failures are redacted in stderr, run errors, and turn error JSON.
+  - `docs/security.md` documents the trust boundary, GitHub credential risk, command execution model, persistence/redaction limits, recovery risks, and failure handling.
+- Changelog: Added security entry for hardened input, persistence, credential, and trust boundaries.
+- Commit: `security: harden harness execution boundaries`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
@@ -245,4 +268,4 @@ Source: `PLAN.md`
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, durable approval handling, detached worker execution, stale-lease recovery, event replay, follow mode, and expanded status exist; security hardening and final operator documentation are not complete yet.
+- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, durable approval handling, detached worker execution, stale-lease recovery, event replay, follow mode, expanded status, and security hardening exist; final operator documentation, CI review, and clean-install acceptance are not complete yet.
