@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add the label-scoped `dispatch` command for idempotent scheduled polling, dry runs, no-ready-issue no-ops, and already-active run detection.
 - Add `bun run install:global` for rebuilding and globally linking the local Agentloop checkout.
 - Add event replay, follow mode, and expanded run status for durable run inspection.
 - Add detached worker execution for queued runs and stale-lease recovery.

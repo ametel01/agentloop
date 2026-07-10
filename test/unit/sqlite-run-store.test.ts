@@ -65,6 +65,7 @@ describe("SQLite run store", () => {
 
     store.createRun(createRunInput({ id: "run-1" }));
 
+    expect(store.getOpenRunByRepoKey("repo-key")?.id).toBe("run-1");
     expect(() => store.createRun(createRunInput({ id: "run-2" }))).toThrow(OpenRunConflictError);
     database.close();
   });

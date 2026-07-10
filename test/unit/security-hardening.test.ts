@@ -107,6 +107,38 @@ describe("security and failure-mode hardening", () => {
     expect(response).toContain("[redacted-secret]");
   });
 
+  test("dispatch persists only issue numbers and URLs from GitHub issue records", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-security-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const exitCode = await runCli(
+      ["dispatch", "--repo", ".", "--trust-repo"],
+      createDependencies(new FakeCodexRunner([]), {
+        readyIssues: [
+          {
+            body: "do not persist body sk-secret123",
+            number: 12,
+            title: "do not persist title",
+            url: "https://github.com/acme/repo/issues/12",
+          },
+        ],
+      }),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
+    const objective =
+      database.query<{ objective: string }, []>("SELECT objective FROM runs").get()?.objective ??
+      "";
+    database.close();
+    expect(objective).toContain("#12 https://github.com/acme/repo/issues/12");
+    expect(objective).not.toContain("do not persist");
+    expect(objective).not.toContain("sk-secret123");
+  });
+
   test("invalid run ids and token-shaped usage errors are redacted", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-security-test-"));
     tempDirs.push(stateDir);
@@ -190,7 +222,11 @@ describe("security and failure-mode hardening", () => {
 
 function createDependencies<TCodexRunner extends CodexRunner>(
   codexRunner: TCodexRunner,
-  options: { codexUnavailable?: boolean; repoSurfaces?: readonly string[] } = {},
+  options: {
+    codexUnavailable?: boolean;
+    readyIssues?: readonly unknown[];
+    repoSurfaces?: readonly string[];
+  } = {},
 ) {
   const homeDir = "/home/alex";
   const repoPath = "/work/agentloop";
@@ -249,6 +285,22 @@ function createDependencies<TCodexRunner extends CodexRunner>(
 
     if (command === "gh" && args[0] === "auth") {
       return { exitCode: 0, stdout: "github.com\n", stderr: "" };
+    }
+
+    if (command === "gh" && args[0] === "label") {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          { name: "agentloop:ready" },
+          { name: "agentloop:running" },
+          { name: "agentloop:blocked" },
+        ]),
+        stderr: "",
+      };
+    }
+
+    if (command === "gh" && args[0] === "issue" && args[1] === "list") {
+      return { exitCode: 0, stdout: JSON.stringify(options.readyIssues ?? []), stderr: "" };
     }
 
     if (command === "gh" && (args[0] === "issue" || args[0] === "pr")) {

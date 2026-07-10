@@ -14,7 +14,7 @@
 
 - [x] Step 0: Progress and changelog tracking setup.
 - [x] Step 1: Ready-issue discovery and scope contract.
-- [ ] Step 2: Idempotent dispatch CLI and durable queueing.
+- [x] Step 2: Idempotent dispatch CLI and durable queueing.
 - [ ] Step 3: Durable run identity in coordinator prompts.
 - [ ] Step 4: GitHub-visible claim protocol in installed skills.
 - [ ] Step 5: Operator polling, security, and recovery documentation.
@@ -31,8 +31,8 @@
 
 ## Current Status
 
-- Status: Step 1 complete.
-- Next step: begin Step 2 idempotent dispatch CLI and durable queueing.
+- Status: Step 2 complete.
+- Next step: begin Step 3 durable run identity in coordinator prompts.
 
 ## Update Rules
 
@@ -47,4 +47,7 @@
 - 2026-07-10: Step 0 Agentloop commit: `5e4cb2d` (`docs: initialize label dispatch implementation tracking`).
 - 2026-07-10: Step 1 added `src/application/dispatch.ts` and `test/unit/dispatch.test.ts` for label preflight, deterministic ready-issue discovery, fail-closed JSON parsing, cap handling, and scope-only objective construction.
 - 2026-07-10: Step 1 validation passed: `bun test test/unit/dispatch.test.ts`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, and `git diff --check`.
-- 2026-07-10: Step 1 Agentloop commit subject: `feat: add ready issue discovery contract`.
+- 2026-07-10: Step 1 Agentloop commit: `65fe7f1` (`feat: add ready issue discovery contract`).
+- 2026-07-10: Step 2 added `agentloop dispatch`, stable text/JSON outcomes, shared queued-run creation, open-run idempotency lookup, and fake-backed CLI/store/security/lifecycle coverage.
+- 2026-07-10: Step 2 validation passed: targeted dispatch CLI/store/security tests, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, `bun run verify`, and `git diff --check`.
+- 2026-07-10: Step 2 Agentloop commit subject: `feat: queue label scoped agentloop runs`.

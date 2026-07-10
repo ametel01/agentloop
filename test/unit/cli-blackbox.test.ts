@@ -80,6 +80,45 @@ describe("CLI black-box exit codes", () => {
     ).resolves.toBe(0);
   });
 
+  test("covers dispatch no-work, queue, and usage failures", async () => {
+    const noWorkStateDir = await tempStateDir();
+    process.env.AGENTLOOP_STATE_DIR = noWorkStateDir;
+    await expect(
+      runCli(
+        ["dispatch", "--repo", ".", "--trust-repo"],
+        createDependencies(new BatchCodexRunner([]), { readyIssues: [] }),
+        quietIo(),
+      ),
+    ).resolves.toBe(0);
+    await expect(
+      runCli(["dispatch", "--repo", "."], createDependencies(new BatchCodexRunner([])), quietIo()),
+    ).resolves.toBe(64);
+
+    const queueStateDir = await tempStateDir();
+    process.env.AGENTLOOP_STATE_DIR = queueStateDir;
+    const codexRunner = new BatchCodexRunner([]);
+    const stdout: string[] = [];
+    await expect(
+      runCli(
+        ["dispatch", "--repo", ".", "--trust-repo", "--json"],
+        createDependencies(codexRunner, {
+          readyIssues: [{ number: 7, url: "https://github.com/acme/repo/issues/7" }],
+        }),
+        {
+          stdout: (message) => stdout.push(message),
+          stderr: () => {},
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(codexRunner.inputs).toHaveLength(0);
+    expect(JSON.parse(stdout.join(""))).toMatchObject({
+      issueNumbers: [7],
+      runId: "id-1",
+      status: "queued",
+    });
+  });
+
   test("covers resume success and failure", async () => {
     const stateDir = await tempStateDir();
     process.env.AGENTLOOP_STATE_DIR = stateDir;
@@ -150,7 +189,10 @@ async function tempStateDir(): Promise<string> {
   return stateDir;
 }
 
-function createDependencies(codexRunner: CodexRunner) {
+function createDependencies(
+  codexRunner: CodexRunner,
+  options: { readyIssues?: readonly unknown[] } = {},
+) {
   const homeDir = "/home/alex";
   const repoPath = "/work/agentloop";
   const fileSystem = new FakeFileSystem();
@@ -201,6 +243,22 @@ function createDependencies(codexRunner: CodexRunner) {
 
       if (command === "gh" && args[0] === "auth") {
         return { exitCode: 0, stdout: "github.com\n", stderr: "" };
+      }
+
+      if (command === "gh" && args[0] === "label") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { name: "agentloop:ready" },
+            { name: "agentloop:running" },
+            { name: "agentloop:blocked" },
+          ]),
+          stderr: "",
+        };
+      }
+
+      if (command === "gh" && args[0] === "issue" && args[1] === "list") {
+        return { exitCode: 0, stdout: JSON.stringify(options.readyIssues ?? []), stderr: "" };
       }
 
       if (command === "gh" && (args[0] === "issue" || args[0] === "pr")) {

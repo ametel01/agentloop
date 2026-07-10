@@ -6,6 +6,7 @@ import { homedir, hostname } from "node:os";
 import type { Usage } from "@openai/codex-sdk";
 
 import { runDoctor, type DoctorDependencies } from "./application/doctor.ts";
+import { buildDispatchObjective, discoverReadyIssues } from "./application/dispatch.ts";
 import { resolveStateDir } from "./application/paths.ts";
 import type { Clock, IdGenerator } from "./application/ports.ts";
 import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "./codex/control-envelope.ts";
@@ -19,7 +20,7 @@ import {
 } from "./codex/prompt-builder.ts";
 import { redactJson, redactText } from "./codex/redaction.ts";
 import { buildThreadOptions } from "./codex/thread-options.ts";
-import { AgentloopError, CliUsageError } from "./domain/errors.ts";
+import { AgentloopError, CliUsageError, OpenRunConflictError } from "./domain/errors.ts";
 import {
   DEFAULT_RUN_LIMITS,
   type ApprovalRequest,
@@ -50,6 +51,7 @@ Usage:
   agentloop --help
   agentloop --version
   agentloop doctor --repo PATH [--json]
+  agentloop dispatch --repo PATH --trust-repo [--dry-run] [--json]
   agentloop run --repo PATH --goal TEXT --trust-repo [--detach] [--model MODEL]
   agentloop resume RUN_ID [--message TEXT] [--accept-skill-change]
   agentloop approve RUN_ID --message TEXT
@@ -61,6 +63,7 @@ Usage:
 
 Commands:
   doctor   Run read-only repository, toolchain, GitHub, SDK, and skill preflight checks.
+  dispatch Queue one repository-level run for open issues labeled agentloop:ready.
   run      Create a durable run, or execute it immediately without --detach.
   resume   Resume a continuing, interrupted, blocked, stuck, exhausted, or failed run.
   approve  Approve one pending durable human approval and resume the run.
@@ -131,6 +134,8 @@ async function runCliUnsafe(
   switch (command) {
     case "doctor":
       return await runDoctorCommand(commandArgs, dependencies, io);
+    case "dispatch":
+      return await dispatchCommand(commandArgs, dependencies, io);
     case "run":
       return await runCommand(commandArgs, dependencies, io);
     case "resume":
@@ -224,23 +229,19 @@ async function runCommand(
   }
 
   const store = await openRunStore(dependencies);
-  const now = (dependencies.clock ?? new SystemClock()).now().toISOString();
-  const id = (dependencies.idGenerator ?? new RandomIdGenerator()).randomId();
-  const limits = parseLimits(parsed.values);
-  const run = store.createRun({
-    id,
-    repoPath: report.repoPath,
-    repoKey: sha256Hex(report.repoPath),
-    objective,
-    objectiveHash: sha256Hex(objective),
-    status: "queued",
-    model: parsed.values.model ?? null,
-    reasoningEffort: parsed.values.reasoning ?? null,
+  const run = createQueuedRun({
     approvalMode,
-    worktreeRoot: report.worktreeRoot,
-    skillFingerprint: requireString(report.skillManifestHash ?? undefined, "skill fingerprint"),
-    limits,
-    now,
+    dependencies,
+    model: parsed.values.model ?? null,
+    objective,
+    reasoningEffort: parsed.values.reasoning ?? null,
+    report: {
+      repoPath: report.repoPath,
+      skillManifestHash: report.skillManifestHash,
+      worktreeRoot: report.worktreeRoot,
+    },
+    store,
+    limits: parseLimits(parsed.values),
   });
 
   if (parsed.values.detach) {
@@ -262,6 +263,147 @@ async function runCommand(
   return EXIT_CODES.ok;
 }
 
+async function dispatchCommand(
+  args: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<number> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: false,
+    options: {
+      "approval-mode": { type: "string", default: "agent-approved" },
+      "dry-run": { type: "boolean", default: false },
+      json: { type: "boolean", default: false },
+      "max-duration": { type: "string" },
+      "max-tokens": { type: "string" },
+      "max-turns": { type: "string" },
+      model: { type: "string" },
+      reasoning: { type: "string" },
+      repo: { type: "string" },
+      "trust-repo": { type: "boolean", default: false },
+    },
+    strict: true,
+  });
+
+  const repo = requireString(parsed.values.repo, "--repo PATH");
+  if (!parsed.values["trust-repo"]) {
+    throw new CliUsageError("Missing required option: --trust-repo");
+  }
+
+  const approvalMode = parsed.values["approval-mode"];
+  if (approvalMode !== "agent-approved" && approvalMode !== "human-merge") {
+    throw new CliUsageError("--approval-mode must be agent-approved or human-merge");
+  }
+
+  const report = await runDoctor({ repo }, dependencies);
+  const exitCode = doctorExitCode(report);
+  if (exitCode !== 0 || report.repoPath === null || report.worktreeRoot === null) {
+    io.stdout(renderDoctorText(report));
+    return exitCode;
+  }
+
+  const discovery = await discoverReadyIssues({
+    commandRunner: dependencies.commandRunner,
+    repoPath: report.repoPath,
+  });
+
+  if (discovery.issues.length === 0) {
+    io.stdout(
+      renderDispatchOutcome(
+        {
+          issueNumbers: [],
+          repoPath: report.repoPath,
+          runId: null,
+          status: "no_ready_issues",
+        },
+        parsed.values.json,
+      ),
+    );
+    return EXIT_CODES.ok;
+  }
+
+  if (parsed.values["dry-run"]) {
+    io.stdout(
+      renderDispatchOutcome(
+        {
+          issueNumbers: discovery.issueNumbers,
+          repoPath: report.repoPath,
+          runId: null,
+          status: "dry_run",
+        },
+        parsed.values.json,
+      ),
+    );
+    return EXIT_CODES.ok;
+  }
+
+  const repoKey = sha256Hex(report.repoPath);
+  const store = await openRunStore(dependencies);
+  const existing = store.getOpenRunByRepoKey(repoKey);
+  if (existing !== null) {
+    io.stdout(
+      renderDispatchOutcome(
+        {
+          issueNumbers: discovery.issueNumbers,
+          repoPath: report.repoPath,
+          runId: existing.id,
+          status: "already_active",
+        },
+        parsed.values.json,
+      ),
+    );
+    return EXIT_CODES.ok;
+  }
+
+  try {
+    const run = createQueuedRun({
+      approvalMode,
+      dependencies,
+      model: parsed.values.model ?? null,
+      objective: buildDispatchObjective(discovery.issues),
+      reasoningEffort: parsed.values.reasoning ?? null,
+      report: {
+        repoPath: report.repoPath,
+        skillManifestHash: report.skillManifestHash,
+        worktreeRoot: report.worktreeRoot,
+      },
+      store,
+      limits: parseLimits(parsed.values),
+    });
+
+    io.stdout(
+      renderDispatchOutcome(
+        {
+          issueNumbers: discovery.issueNumbers,
+          repoPath: report.repoPath,
+          runId: run.id,
+          status: "queued",
+        },
+        parsed.values.json,
+      ),
+    );
+    return EXIT_CODES.ok;
+  } catch (error) {
+    if (error instanceof OpenRunConflictError) {
+      io.stdout(
+        renderDispatchOutcome(
+          {
+            issueNumbers: discovery.issueNumbers,
+            repoPath: report.repoPath,
+            runId: error.existingRunId,
+            status: "already_active",
+          },
+          parsed.values.json,
+        ),
+      );
+      return EXIT_CODES.ok;
+    }
+
+    throw error;
+  }
+}
+
 interface ExecuteRunInput {
   run: RunRecord;
   store: SqliteRunStore;
@@ -274,6 +416,50 @@ interface ExecuteRunInput {
 }
 
 type TurnKind = "initial" | "continuation" | "recovery" | "approval-response";
+
+interface QueuedRunContext {
+  repoPath: string | null;
+  skillManifestHash: string | null;
+  worktreeRoot: string | null;
+}
+
+interface CreateQueuedRunInput {
+  approvalMode: "agent-approved" | "human-merge";
+  dependencies: CliDependencies;
+  limits: RunLimits;
+  model: string | null;
+  objective: string;
+  reasoningEffort: string | null;
+  report: QueuedRunContext;
+  store: SqliteRunStore;
+}
+
+function createQueuedRun(input: CreateQueuedRunInput): RunRecord {
+  const now = (input.dependencies.clock ?? new SystemClock()).now().toISOString();
+  const id = (input.dependencies.idGenerator ?? new RandomIdGenerator()).randomId();
+  const repoPath = requireString(input.report.repoPath ?? undefined, "repo path");
+  const worktreeRoot = requireString(input.report.worktreeRoot ?? undefined, "worktree root");
+  const skillFingerprint = requireString(
+    input.report.skillManifestHash ?? undefined,
+    "skill fingerprint",
+  );
+
+  return input.store.createRun({
+    approvalMode: input.approvalMode,
+    id,
+    limits: input.limits,
+    model: input.model,
+    now,
+    objective: input.objective,
+    objectiveHash: sha256Hex(input.objective),
+    reasoningEffort: input.reasoningEffort,
+    repoKey: sha256Hex(repoPath),
+    repoPath,
+    skillFingerprint,
+    status: "queued",
+    worktreeRoot,
+  });
+}
 
 async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
   const { store, dependencies, io } = input;
@@ -1210,6 +1396,34 @@ function parseOptionalDurationMs(value: string | undefined): number | undefined 
   const unit = match.groups.unit;
   const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
   return amount * multiplier;
+}
+
+type DispatchStatus = "already_active" | "dry_run" | "no_ready_issues" | "queued";
+
+interface DispatchOutcome {
+  status: DispatchStatus;
+  runId: string | null;
+  repoPath: string;
+  issueNumbers: number[];
+}
+
+function renderDispatchOutcome(outcome: DispatchOutcome, json: boolean): string {
+  if (json) {
+    return `${JSON.stringify(outcome, null, 2)}\n`;
+  }
+
+  const issueText =
+    outcome.issueNumbers.length === 0
+      ? "none"
+      : outcome.issueNumbers.map((number) => `#${number}`).join(", ");
+
+  return [
+    `dispatch: ${outcome.status}`,
+    `run: ${outcome.runId ?? "none"}`,
+    `repo: ${outcome.repoPath}`,
+    `issues: ${issueText}`,
+    "",
+  ].join("\n");
 }
 
 function renderRunList(runs: readonly RunRecord[]): string {

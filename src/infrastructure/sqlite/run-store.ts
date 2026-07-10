@@ -59,6 +59,7 @@ interface ApprovalRow {
 
 export interface RunStore {
   createRun(input: CreateRunInput): RunRecord;
+  getOpenRunByRepoKey(repoKey: string): RunRecord | null;
   getRun(id: string): RunRecord | null;
   countEvents(runId: string): number;
   countTurns(runId: string): number;
@@ -273,6 +274,31 @@ export class SqliteRunStore implements RunStore {
 
   getRun(id: string): RunRecord | null {
     const row = this.database.query<RunRow, [string]>("SELECT * FROM runs WHERE id = ?").get(id);
+    return row === null ? null : mapRun(row);
+  }
+
+  getOpenRunByRepoKey(repoKey: string): RunRecord | null {
+    const row = this.database
+      .query<RunRow, [string]>(
+        `
+        SELECT * FROM runs
+        WHERE repo_key = ?
+          AND status IN (
+            'queued',
+            'running',
+            'continuing',
+            'waiting_approval',
+            'externally_blocked',
+            'stuck',
+            'budget_exhausted',
+            'failed'
+          )
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      )
+      .get(repoKey);
+
     return row === null ? null : mapRun(row);
   }
 
