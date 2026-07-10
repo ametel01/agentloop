@@ -50,6 +50,7 @@ Usage:
   agentloop resume RUN_ID [--message TEXT] [--accept-skill-change]
   agentloop approve RUN_ID --message TEXT
   agentloop reject RUN_ID --message TEXT
+  agentloop worker [--once] [--poll-interval DURATION]
   agentloop status [RUN_ID] [--json]
   agentloop cancel RUN_ID [--reason TEXT]
 
@@ -59,6 +60,7 @@ Commands:
   resume   Resume a continuing, interrupted, blocked, stuck, exhausted, or failed run.
   approve  Approve one pending durable human approval and resume the run.
   reject   Reject one pending durable human approval and cancel the run.
+  worker   Claim queued or expired recoverable runs and execute them.
   status   Show durable run status.
   cancel   Cancel a queued run.
 `;
@@ -131,6 +133,8 @@ async function runCliUnsafe(
       return await approveCommand(commandArgs, dependencies, io);
     case "reject":
       return await rejectCommand(commandArgs, dependencies, io);
+    case "worker":
+      return await workerCommand(commandArgs, dependencies, io);
     case "status":
       return await statusCommand(commandArgs, dependencies, io);
     case "cancel":
@@ -241,6 +245,7 @@ async function runCommand(
     dependencies,
     firstTurnKind: "initial",
     io,
+    leaseOwnerId: null,
     message: null,
     run,
     store,
@@ -257,6 +262,7 @@ interface ExecuteRunInput {
   firstTurnKind: TurnKind;
   message: string | null;
   approvalId: string | null;
+  leaseOwnerId: string | null;
 }
 
 type TurnKind = "initial" | "continuation" | "recovery" | "approval-response";
@@ -265,16 +271,18 @@ async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
   const { store, dependencies, io } = input;
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
-  const ownerId = `${hostname()}:${process.pid}:${idGenerator.randomId()}`;
-  const acquiredAt = clock.now();
-  const expiresAt = new Date(acquiredAt.getTime() + input.run.limits.leaseTtlMs);
-  store.acquireLease({
-    acquiredAt: acquiredAt.toISOString(),
-    expiresAt: expiresAt.toISOString(),
-    ownerId,
-    repoKey: input.run.repoKey,
-    runId: input.run.id,
-  });
+  const ownerId = input.leaseOwnerId ?? `${hostname()}:${process.pid}:${idGenerator.randomId()}`;
+  if (input.leaseOwnerId === null) {
+    const acquiredAt = clock.now();
+    const expiresAt = new Date(acquiredAt.getTime() + input.run.limits.leaseTtlMs);
+    store.acquireLease({
+      acquiredAt: acquiredAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      ownerId,
+      repoKey: input.run.repoKey,
+      runId: input.run.id,
+    });
+  }
 
   let currentRun = input.run;
   let currentTurnKind = input.firstTurnKind;
@@ -726,6 +734,7 @@ async function resumeCommand(
     dependencies,
     firstTurnKind: turnKind,
     io,
+    leaseOwnerId: null,
     message: parsed.values.message ?? null,
     run,
     store,
@@ -836,6 +845,7 @@ async function approveCommand(
     dependencies,
     firstTurnKind: "approval-response",
     io,
+    leaseOwnerId: null,
     message,
     run,
     store,
@@ -886,6 +896,90 @@ async function rejectCommand(
   });
   io.stdout(renderRun(cancelled, store.listPendingApprovals(cancelled.id)));
   return EXIT_CODES.ok;
+}
+
+async function workerCommand(
+  args: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<number> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: false,
+    options: {
+      once: { type: "boolean", default: false },
+      "poll-interval": { type: "string", default: "5s" },
+    },
+    strict: true,
+  });
+
+  const pollIntervalMs = parseOptionalDurationMs(parsed.values["poll-interval"]) ?? 5_000;
+  const store = await openRunStore(dependencies);
+  const clock = dependencies.clock ?? new SystemClock();
+  const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
+  let shuttingDown = false;
+  const stop = () => {
+    shuttingDown = true;
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+
+  try {
+    while (!shuttingDown) {
+      const ownerId = `${hostname()}:${process.pid}:${idGenerator.randomId()}`;
+      const now = clock.now();
+      const claim = claimWorkerRun(store, ownerId, now.toISOString());
+
+      if (claim !== null) {
+        io.stdout(`claimed: ${claim.run.id}\n`);
+        await executeRun({
+          approvalId: null,
+          dependencies,
+          firstTurnKind: claim.turnKind,
+          io,
+          leaseOwnerId: ownerId,
+          message: null,
+          run: claim.run,
+          store,
+        });
+
+        if (parsed.values.once) {
+          return EXIT_CODES.ok;
+        }
+      } else if (parsed.values.once) {
+        return EXIT_CODES.ok;
+      } else {
+        await sleep(pollIntervalMs);
+      }
+    }
+
+    return EXIT_CODES.ok;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
+function claimWorkerRun(
+  store: SqliteRunStore,
+  ownerId: string,
+  now: string,
+): { run: RunRecord; turnKind: TurnKind } | null {
+  const queued = store.claimOldestQueued({ now, ownerId });
+  if (queued !== null) {
+    return { run: queued, turnKind: "initial" };
+  }
+
+  const expired = store.claimExpiredActive({ now, ownerId });
+  if (expired !== null) {
+    return { run: expired, turnKind: "recovery" };
+  }
+
+  return null;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function exactlyOnePendingApproval(store: SqliteRunStore, runId: string): ApprovalRequest {

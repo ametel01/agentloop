@@ -73,6 +73,8 @@ export interface RunStore {
   createApproval(input: CreateApprovalInput): ApprovalRequest;
   listPendingApprovals(runId: string): ApprovalRequest[];
   resolveApproval(input: ResolveApprovalInput): ApprovalRequest;
+  claimOldestQueued(input: ClaimRunInput): RunRecord | null;
+  claimExpiredActive(input: ClaimRunInput): RunRecord | null;
   acquireLease(input: AcquireLeaseInput): void;
   releaseLease(repoKey: string, ownerId: string): void;
 }
@@ -163,6 +165,11 @@ export interface AcquireLeaseInput {
   ownerId: string;
   acquiredAt: string;
   expiresAt: string;
+}
+
+export interface ClaimRunInput {
+  ownerId: string;
+  now: string;
 }
 
 export class SqliteRunStore implements RunStore {
@@ -649,6 +656,95 @@ export class SqliteRunStore implements RunStore {
     return mapApproval(approval);
   }
 
+  claimOldestQueued(input: ClaimRunInput): RunRecord | null {
+    this.database.run("BEGIN IMMEDIATE");
+    try {
+      const candidate = this.database
+        .query<{ id: string; repo_key: string; limits_json: string }, []>(
+          `
+          SELECT id, repo_key, limits_json
+          FROM runs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT 1
+        `,
+        )
+        .get();
+      if (candidate === null) {
+        this.database.run("COMMIT");
+        return null;
+      }
+
+      const expiresAt = leaseExpiresAt(input.now, candidate.limits_json);
+      this.database
+        .query(
+          `
+          INSERT INTO leases(repo_key, run_id, owner_id, acquired_at, heartbeat_at, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(candidate.repo_key, candidate.id, input.ownerId, input.now, input.now, expiresAt);
+      this.database
+        .query("UPDATE runs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?")
+        .run(input.now, input.now, candidate.id);
+
+      const run = this.getRun(candidate.id);
+      this.database.run("COMMIT");
+      return run;
+    } catch (error) {
+      this.database.run("ROLLBACK");
+      throw error;
+    }
+  }
+
+  claimExpiredActive(input: ClaimRunInput): RunRecord | null {
+    this.database.run("BEGIN IMMEDIATE");
+    try {
+      const candidate = this.database
+        .query<{ id: string; repo_key: string; limits_json: string }, [string]>(
+          `
+          SELECT runs.id, runs.repo_key, runs.limits_json
+          FROM runs
+          INNER JOIN leases ON leases.repo_key = runs.repo_key
+          WHERE leases.expires_at <= ?
+            AND runs.status IN ('running', 'continuing')
+            AND (
+              runs.thread_id IS NOT NULL
+              OR NOT EXISTS (SELECT 1 FROM events WHERE events.run_id = runs.id)
+            )
+          ORDER BY leases.expires_at ASC
+          LIMIT 1
+        `,
+        )
+        .get(input.now);
+      if (candidate === null) {
+        this.database.run("COMMIT");
+        return null;
+      }
+
+      const expiresAt = leaseExpiresAt(input.now, candidate.limits_json);
+      this.database.query("DELETE FROM leases WHERE repo_key = ?").run(candidate.repo_key);
+      this.database
+        .query(
+          `
+          INSERT INTO leases(repo_key, run_id, owner_id, acquired_at, heartbeat_at, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(candidate.repo_key, candidate.id, input.ownerId, input.now, input.now, expiresAt);
+      this.database
+        .query("UPDATE runs SET updated_at = ? WHERE id = ?")
+        .run(input.now, candidate.id);
+
+      const run = this.getRun(candidate.id);
+      this.database.run("COMMIT");
+      return run;
+    } catch (error) {
+      this.database.run("ROLLBACK");
+      throw error;
+    }
+  }
+
   acquireLease(input: AcquireLeaseInput): void {
     this.database
       .query(
@@ -753,4 +849,9 @@ function mapApproval(row: ApprovalRow): ApprovalRequest {
     runId: row.run_id,
     status: row.status,
   };
+}
+
+function leaseExpiresAt(now: string, limitsJson: string): string {
+  const limits = JSON.parse(limitsJson) as RunLimits;
+  return new Date(Date.parse(now) + limits.leaseTtlMs).toISOString();
 }

@@ -34,17 +34,17 @@ Source: `PLAN.md`
 - [x] Step 5: Continuation, Resume, and Crash Recovery
 - [x] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
 - [x] Step 7: Durable Human Approval Flow
-- [ ] Step 8: Detached Worker and Lease Recovery
+- [x] Step 8: Detached Worker and Lease Recovery
 - [ ] Step 9: Event Inspection and Operator Observability
 - [ ] Step 10: Security and Failure-Mode Hardening
 - [ ] Step 11: Documentation, CI, and Final Acceptance
 
 ## Current Status
 
-- Completed step: Step 7
-- Current implementation focus: Step 8
-- Next step: Step 8: Detached Worker and Lease Recovery
-- Last completed commit: Step 7, `feat: add durable approval checkpoints`
+- Completed step: Step 8
+- Current implementation focus: Step 9
+- Next step: Step 9: Event Inspection and Operator Observability
+- Last completed commit: Step 8, `feat: process queued runs with durable worker`
 
 ## Validation Log
 
@@ -198,6 +198,26 @@ Source: `PLAN.md`
 - Changelog: Added entry for durable human approval checkpoints, approve/reject commands, and approval-response resume prompts.
 - Commit: `feat: add durable approval checkpoints`
 
+### Step 8: Detached Worker and Lease Recovery
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 36 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+- Worker behavior:
+  - `worker --once` claims and executes a detached queued run from the durable SQLite queue.
+  - Atomic queued claims prevent a second worker from claiming the same run.
+  - Expired active leases for `running` or `continuing` runs are reclaimed once and resumed with the recovery prompt.
+  - `waiting_approval` and terminal runs are not auto-claimed by the worker.
+  - `worker --once` exits zero immediately when no work is available.
+  - Worker execution reuses the same supervisor path as foreground and explicit resume execution, including heartbeat renewal, signal cancellation, and conditional lease release.
+- Changelog: Added entry for detached worker execution and stale-lease recovery.
+- Commit: `feat: process queued runs with durable worker`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
@@ -205,4 +225,4 @@ Source: `PLAN.md`
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, and durable approval handling exist; detached worker recovery is not implemented yet.
+- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, durable approval handling, detached worker execution, and stale-lease recovery exist; event inspection and richer operator observability are not implemented yet.

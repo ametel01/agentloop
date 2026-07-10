@@ -512,6 +512,193 @@ describe("foreground run", () => {
     const run = JSON.parse(statusJson.join("")) as { status: string };
     expect(run.status).toBe("cancelled");
   });
+
+  test("worker --once executes a detached queued run", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-worker-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const queuedStdout: string[] = [];
+    const queuedExit = await runCli(
+      ["run", "--repo", ".", "--goal", "worker queue", "--trust-repo", "--detach"],
+      createDependencies(new FakeCodexRunner([])),
+      {
+        stdout: (message) => queuedStdout.push(message),
+        stderr: () => {},
+      },
+    );
+
+    expect(queuedExit).toBe(0);
+    expect(queuedStdout.join("").trim()).toBe("id-1");
+
+    const workerRunner = new FakeCodexRunner(completeEvents());
+    const workerStdout: string[] = [];
+    const workerExit = await runCli(["worker", "--once"], createDependencies(workerRunner), {
+      stdout: (message) => workerStdout.push(message),
+      stderr: () => {},
+    });
+
+    expect(workerExit).toBe(0);
+    expect(workerStdout.join("")).toContain("claimed: id-1");
+    expect(workerRunner.inputs).toHaveLength(1);
+    expect(workerRunner.inputs[0]?.threadId).toBeNull();
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string; threadId: string | null };
+    expect(run.status).toBe("complete");
+    expect(run.threadId).toBe("thread-1");
+  });
+
+  test("atomic queued claims prevent two workers from taking the same run", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-worker-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "single claim", "--trust-repo", "--detach"],
+      createDependencies(new FakeCodexRunner([])),
+      quietIo(),
+    );
+
+    const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
+    const store = new SqliteRunStore(database);
+    const first = store.claimOldestQueued({
+      now: "2026-07-10T00:00:01.000Z",
+      ownerId: "worker-1",
+    });
+    const second = store.claimOldestQueued({
+      now: "2026-07-10T00:00:01.000Z",
+      ownerId: "worker-2",
+    });
+    const leaseCount = database
+      .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM leases")
+      .get()?.count;
+    database.close();
+
+    expect(first?.id).toBe("id-1");
+    expect(second).toBeNull();
+    expect(leaseCount).toBe(1);
+  });
+
+  test("worker --once reclaims an expired active lease with a recovery prompt", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-worker-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "stale worker", "--trust-repo", "--detach"],
+      createDependencies(new FakeCodexRunner([])),
+      quietIo(),
+    );
+
+    const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
+    const store = new SqliteRunStore(database);
+    const stale = store.claimOldestQueued({
+      now: "2026-07-10T00:00:00.000Z",
+      ownerId: "stale-worker",
+    });
+    database
+      .query("UPDATE leases SET expires_at = ? WHERE repo_key = ?")
+      .run("2026-07-09T23:59:59.000Z", stale?.repoKey ?? "");
+    database.close();
+
+    const workerRunner = new FakeCodexRunner(completeEvents());
+    const workerExit = await runCli(
+      ["worker", "--once"],
+      createDependencies(workerRunner),
+      quietIo(),
+    );
+
+    expect(workerExit).toBe(0);
+    expect(workerRunner.inputs).toHaveLength(1);
+    expect(workerRunner.inputs[0]?.threadId).toBeNull();
+    expect(workerRunner.inputs[0]?.prompt).toContain("This is a recovery turn");
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string };
+    expect(run.status).toBe("complete");
+  });
+
+  test("worker --once does not auto-claim waiting approval or terminal runs", async () => {
+    const waitingStateDir = await mkdtemp(join(tmpdir(), "agentloop-worker-waiting-test-"));
+    tempDirs.push(waitingStateDir);
+    process.env.AGENTLOOP_STATE_DIR = waitingStateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "needs operator", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(waitingApprovalEvents())),
+      quietIo(),
+    );
+
+    const waitingWorker = new FakeCodexRunner(completeEvents());
+    const waitingExit = await runCli(
+      ["worker", "--once"],
+      createDependencies(waitingWorker),
+      quietIo(),
+    );
+
+    expect(waitingExit).toBe(0);
+    expect(waitingWorker.inputs).toHaveLength(0);
+
+    const waitingStatusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => waitingStatusJson.push(message),
+      stderr: () => {},
+    });
+    const waitingRun = JSON.parse(waitingStatusJson.join("")) as { status: string };
+    expect(waitingRun.status).toBe("waiting_approval");
+
+    const terminalStateDir = await mkdtemp(join(tmpdir(), "agentloop-worker-terminal-test-"));
+    tempDirs.push(terminalStateDir);
+    process.env.AGENTLOOP_STATE_DIR = terminalStateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "already done", "--trust-repo", "--detach"],
+      createDependencies(new FakeCodexRunner([])),
+      quietIo(),
+    );
+
+    const terminalDatabase = await openDatabase({
+      path: join(terminalStateDir, "agentloop.sqlite"),
+    });
+    const terminalStore = new SqliteRunStore(terminalDatabase);
+    const terminalClaim = terminalStore.claimOldestQueued({
+      now: "2026-07-10T00:00:00.000Z",
+      ownerId: "terminal-worker",
+    });
+    if (terminalClaim === null) {
+      throw new Error("expected terminal test run to be claimed");
+    }
+    terminalStore.transitionRun({
+      expectedStatus: "running",
+      id: terminalClaim.id,
+      nextStatus: "complete",
+      now: "2026-07-10T00:00:01.000Z",
+      reason: "terminal test fixture",
+    });
+    terminalDatabase
+      .query("UPDATE leases SET expires_at = ? WHERE repo_key = ?")
+      .run("2026-07-09T23:59:59.000Z", terminalClaim.repoKey);
+    terminalDatabase.close();
+
+    const terminalWorker = new FakeCodexRunner(completeEvents());
+    const terminalExit = await runCli(
+      ["worker", "--once"],
+      createDependencies(terminalWorker),
+      quietIo(),
+    );
+
+    expect(terminalExit).toBe(0);
+    expect(terminalWorker.inputs).toHaveLength(0);
+  });
 });
 
 function createDependencies<TCodexRunner extends CodexRunner>(
