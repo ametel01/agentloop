@@ -37,14 +37,14 @@ Source: `PLAN.md`
 - [x] Step 8: Detached Worker and Lease Recovery
 - [x] Step 9: Event Inspection and Operator Observability
 - [x] Step 10: Security and Failure-Mode Hardening
-- [ ] Step 11: Documentation, CI, and Final Acceptance
+- [x] Step 11: Documentation, CI, and Final Acceptance
 
 ## Current Status
 
-- Completed step: Step 10
-- Current implementation focus: Step 11
-- Next step: Step 11: Documentation, CI, and Final Acceptance
-- Last completed commit: Step 10, `security: harden harness execution boundaries`
+- Completed step: Step 11
+- Current implementation focus: none
+- Next step: none
+- Last completed commit: Step 11, `docs: finalize agentloop operations`
 
 ## Validation Log
 
@@ -261,6 +261,30 @@ Source: `PLAN.md`
 - Changelog: Added security entry for hardened input, persistence, credential, and trust boundaries.
 - Commit: `security: harden harness execution boundaries`
 
+### Step 11: Documentation, CI, and Final Acceptance
+
+- Status: Complete
+- Validation:
+  - Removed `node_modules` and ran `bun install --frozen-lockfile`; passed.
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 52 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+  - `bun audit` passed with no vulnerabilities found.
+  - Built CLI smoke passed for help, doctor against this repository, detached run, status, events, cancel, and no-work worker using temporary state and repository directories.
+  - Fake-backed black-box tests cover success and failure exit codes for help/version, doctor, run, resume, approve, reject, worker, events, status, and cancel.
+- Documentation and CI:
+  - `README.md` documents installation, command usage, exit codes, doctor, foreground runs, detached worker mode, status/events, resume/recovery, approvals, cancellation, model inheritance, quality gates, live smoke authorization, and limitations.
+  - `docs/architecture.md` documents ownership layers, state machine, SQLite ledger, turn durability boundary, recovery sequence, prompts/skills, leases, and budgets.
+  - `docs/operations.md` documents state paths, backups, WAL files, worker supervision, stale leases, recovery, budget tuning, approvals, and incident handling.
+  - `docs/security.md` contains the final reviewed security boundary.
+  - `.github/workflows/ci.yml` already uses `bun install --frozen-lockfile` and the aggregate `bun run verify` gate.
+- Live SDK smoke: skipped because explicit authorization for model calls was not provided; documented as an operator gate before first real run.
+- Changelog: No Step 11 entry because this step shipped documentation, tests, and validation only.
+- Commit: `docs: finalize agentloop operations`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
@@ -268,4 +292,4 @@ Source: `PLAN.md`
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, durable approval handling, detached worker execution, stale-lease recovery, event replay, follow mode, expanded status, and security hardening exist; final operator documentation, CI review, and clean-install acceptance are not complete yet.
+- Known durability limitations: v1 remains a single-host local harness; turn-level recovery is at least once; inner Codex turn side effects are not exactly once; redaction is best-effort pattern matching; live SDK start/resume remains opt-in and was not run without explicit model-call authorization.
