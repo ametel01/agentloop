@@ -10,17 +10,6 @@ and this project adheres to Semantic Versioning.
 ### Added
 
 - Add `bun run install:global` for rebuilding and globally linking the local Agentloop checkout.
-
-### Fixed
-
-- Make approval and blocker control-envelope fields valid strict Structured Outputs schemas.
-
-### Security
-
-- Harden CLI input, secret redaction, repository surface warnings, and fail-closed state handling.
-
-### Added
-
 - Add event replay, follow mode, and expanded run status for durable run inspection.
 - Add detached worker execution for queued runs and stale-lease recovery.
 - Add durable human approval checkpoints with approve/reject commands and approval-response resume prompts.
@@ -29,3 +18,11 @@ and this project adheres to Semantic Versioning.
 - Add foreground Codex dev-team execution with streamed event persistence and strict control-envelope validation.
 - Add durable queued runs, SQLite-backed status inspection, and queued-run cancellation.
 - Add the `agentloop doctor` preflight command for repository, toolchain, GitHub, SDK, skill, state, and trust-boundary checks.
+
+### Fixed
+
+- Make approval and blocker control-envelope fields valid strict Structured Outputs schemas.
+
+### Security
+
+- Harden CLI input, secret redaction, repository surface warnings, and fail-closed state handling.
