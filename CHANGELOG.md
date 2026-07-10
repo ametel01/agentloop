@@ -7,6 +7,10 @@ and this project adheres to Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Add `bun run install:global` for rebuilding and globally linking the local Agentloop checkout.
+
 ### Fixed
 
 - Make approval and blocker control-envelope fields valid strict Structured Outputs schemas.

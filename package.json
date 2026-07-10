@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 10000",
     "build": "bun build ./src/cli.ts --target=bun --outdir=dist",
+    "install:global": "bun scripts/install-global.ts",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build"
   },
   "dependencies": {

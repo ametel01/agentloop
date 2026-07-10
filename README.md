@@ -21,6 +21,14 @@ After building, run:
 bun dist/cli.js --help
 ```
 
+To rebuild the current checkout, link `agentloop` globally, and add Bun's global binary directory to your shell profile when missing:
+
+```bash
+bun run install:global
+```
+
+The command is idempotent, so rerun it after local changes. If it updates your shell profile, open a new shell or source the profile before invoking `agentloop` from the current terminal.
+
 ## Commands
 
 ```text
