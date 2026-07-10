@@ -1,1 +1,15 @@
 .DS_Store
+node_modules/
+dist/
+coverage/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+.env
+.env.*
+.agentloop-state/
+.agentloop-worktrees/
+tmp/
+temp/

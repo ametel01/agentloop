@@ -1,0 +1,30 @@
+{
+  "name": "agentloop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "bin": {
+    "agentloop": "./dist/cli.js"
+  },
+  "scripts": {
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --timeout 10000",
+    "build": "bun build ./src/cli.ts --target=bun --outdir=dist",
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.144.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "@types/bun": "1.3.14",
+    "typescript": "7.0.2"
+  }
+}

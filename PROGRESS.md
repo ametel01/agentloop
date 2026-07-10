@@ -27,7 +27,7 @@ Source: `PLAN.md`
 ## Step Checklist
 
 - [x] Step 0: Progress and Changelog Tracking Setup
-- [ ] Step 1: Toolchain and Quality Gates Setup
+- [x] Step 1: Toolchain and Quality Gates Setup
 - [ ] Step 2: Domain Contracts and Doctor Command
 - [ ] Step 3: Durable Ledger and Run Lifecycle Commands
 - [ ] Step 4: Codex SDK Adapter and Foreground Coordinator Run
@@ -41,10 +41,10 @@ Source: `PLAN.md`
 
 ## Current Status
 
-- Completed step: Step 0
-- Current implementation focus: Step 1
-- Next step: Step 1: Toolchain and Quality Gates Setup
-- Last completed commit: pending
+- Completed step: Step 1
+- Current implementation focus: Step 2
+- Next step: Step 2: Domain Contracts and Doctor Command
+- Last completed commit: Step 0, `0545985`
 
 ## Validation Log
 
@@ -55,11 +55,27 @@ Source: `PLAN.md`
   - `PROGRESS.md` created with source list, update rules, and Steps 0 through 11.
   - `CHANGELOG.md` created with Keep a Changelog 1.0.0 preamble and `## [Unreleased]`.
 - Changelog: No entry added because tracking setup is not a functional change.
+- Commit: `0545985`
+
+### Step 1: Toolchain and Quality Gates Setup
+
+- Status: Complete
+- Validation:
+  - `bun install --frozen-lockfile` passed from a clean dependency directory.
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+  - `bun run dist/cli.js --help` exited zero and printed scaffold usage.
+- Baseline result: quality gates are established and passing.
+- Changelog: No entry added because toolchain setup is not observable product behavior.
 - Commit: pending
 
 ## Run Notes
 
-- Baseline quality gates: not available until Step 1 creates the toolchain.
+- Baseline quality gates: established in Step 1 and passing.
 - SDK compatibility: not tested yet.
 - Live SDK smoke test: not run; opt-in Step 4 validation only.
 - Migration version: none yet.
