@@ -12,13 +12,20 @@ import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "./codex/control-e
 import { ProductionCodexRunner, type CodexRunner } from "./codex/client.ts";
 import { agentMessageText, eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
 import {
+  buildApprovalResponsePrompt,
   buildContinuationPrompt,
   buildInitialPrompt,
   buildRecoveryPrompt,
 } from "./codex/prompt-builder.ts";
 import { buildThreadOptions } from "./codex/thread-options.ts";
 import { AgentloopError, CliUsageError } from "./domain/errors.ts";
-import { DEFAULT_RUN_LIMITS, type RunLimits, type RunRecord, type RunUsage } from "./domain/run.ts";
+import {
+  DEFAULT_RUN_LIMITS,
+  type ApprovalRequest,
+  type RunLimits,
+  type RunRecord,
+  type RunUsage,
+} from "./domain/run.ts";
 import { ProductionCommandRunner } from "./infrastructure/command-runner.ts";
 import { NodeFileSystem } from "./infrastructure/filesystem.ts";
 import { collectProgressFingerprint } from "./infrastructure/fingerprint.ts";
@@ -41,6 +48,8 @@ Usage:
   agentloop doctor --repo PATH [--json]
   agentloop run --repo PATH --goal TEXT --trust-repo [--detach] [--model MODEL]
   agentloop resume RUN_ID [--message TEXT] [--accept-skill-change]
+  agentloop approve RUN_ID --message TEXT
+  agentloop reject RUN_ID --message TEXT
   agentloop status [RUN_ID] [--json]
   agentloop cancel RUN_ID [--reason TEXT]
 
@@ -48,6 +57,8 @@ Commands:
   doctor   Run read-only repository, toolchain, GitHub, SDK, and skill preflight checks.
   run      Create a durable run, or execute it immediately without --detach.
   resume   Resume a continuing, interrupted, blocked, stuck, exhausted, or failed run.
+  approve  Approve one pending durable human approval and resume the run.
+  reject   Reject one pending durable human approval and cancel the run.
   status   Show durable run status.
   cancel   Cancel a queued run.
 `;
@@ -116,6 +127,10 @@ async function runCliUnsafe(
       return await runCommand(commandArgs, dependencies, io);
     case "resume":
       return await resumeCommand(commandArgs, dependencies, io);
+    case "approve":
+      return await approveCommand(commandArgs, dependencies, io);
+    case "reject":
+      return await rejectCommand(commandArgs, dependencies, io);
     case "status":
       return await statusCommand(commandArgs, dependencies, io);
     case "cancel":
@@ -222,6 +237,7 @@ async function runCommand(
   }
 
   const completed = await executeRun({
+    approvalId: null,
     dependencies,
     firstTurnKind: "initial",
     io,
@@ -229,7 +245,7 @@ async function runCommand(
     run,
     store,
   });
-  io.stdout(renderRun(completed));
+  io.stdout(renderRun(completed, store.listPendingApprovals(completed.id)));
   return EXIT_CODES.ok;
 }
 
@@ -240,9 +256,10 @@ interface ExecuteRunInput {
   io: CliIo;
   firstTurnKind: TurnKind;
   message: string | null;
+  approvalId: string | null;
 }
 
-type TurnKind = "initial" | "continuation" | "recovery";
+type TurnKind = "initial" | "continuation" | "recovery" | "approval-response";
 
 async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
   const { store, dependencies, io } = input;
@@ -281,6 +298,7 @@ async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
 
       currentRun = await executeSingleTurn({
         dependencies,
+        approvalId: input.approvalId,
         io,
         message: input.message,
         run: currentRun,
@@ -310,6 +328,7 @@ interface ExecuteSingleTurnInput {
   turnKind: TurnKind;
   message: string | null;
   signal: AbortSignal;
+  approvalId: string | null;
 }
 
 async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunRecord> {
@@ -317,7 +336,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
   const turnId = idGenerator.randomId();
-  const prompt = buildPrompt(turnKind, run, input.message);
+  const prompt = buildPrompt(turnKind, run, input.message, input.approvalId);
   store.createTurn({
     fingerprintBefore: null,
     id: turnId,
@@ -409,6 +428,30 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
         nextStatus: "budget_exhausted",
         now: clock.now().toISOString(),
         reason: budgetReason,
+      });
+    }
+
+    if (envelope.status === "waiting_approval") {
+      if (envelope.approval === null) {
+        throw new Error("waiting_approval envelope missing approval details");
+      }
+
+      store.createApproval({
+        evidenceJson: JSON.stringify(envelope.evidence),
+        id: idGenerator.randomId(),
+        kind: envelope.approval.kind,
+        operationJson: JSON.stringify(envelope.approval.operation),
+        question: envelope.approval.question,
+        requestedAt: clock.now().toISOString(),
+        risk: envelope.approval.risk,
+        runId: updatedRun.id,
+      });
+      return store.transitionRun({
+        expectedStatus: "running",
+        id: updatedRun.id,
+        nextStatus: "waiting_approval",
+        now: clock.now().toISOString(),
+        reason: envelope.summary,
       });
     }
 
@@ -528,7 +571,12 @@ function installSignalHandlers(abortController: AbortController): () => void {
   };
 }
 
-function buildPrompt(turnKind: TurnKind, run: RunRecord, message: string | null): string {
+function buildPrompt(
+  turnKind: TurnKind,
+  run: RunRecord,
+  message: string | null,
+  approvalId: string | null,
+): string {
   switch (turnKind) {
     case "initial":
       return buildInitialPrompt(run);
@@ -536,6 +584,12 @@ function buildPrompt(turnKind: TurnKind, run: RunRecord, message: string | null)
       return buildContinuationPrompt(run);
     case "recovery":
       return buildRecoveryPrompt(run, message);
+    case "approval-response":
+      return buildApprovalResponsePrompt(
+        run,
+        requireString(approvalId ?? undefined, "approval ID"),
+        requireString(message ?? undefined, "approval response"),
+      );
   }
 }
 
@@ -654,7 +708,7 @@ async function resumeCommand(
         now: clock.now().toISOString(),
         reason: "skill fingerprint changed",
       });
-      io.stdout(renderRun(waiting));
+      io.stdout(renderRun(waiting, store.listPendingApprovals(waiting.id)));
       return 2;
     }
 
@@ -668,6 +722,7 @@ async function resumeCommand(
   const turnKind = determineResumeTurnKind(store, run);
   run = transitionToContinuingForResume(store, run, clock.now().toISOString());
   const completed = await executeRun({
+    approvalId: null,
     dependencies,
     firstTurnKind: turnKind,
     io,
@@ -726,6 +781,137 @@ function determineResumeTurnKind(store: SqliteRunStore, run: RunRecord): TurnKin
   return "recovery";
 }
 
+async function approveCommand(
+  args: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<number> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      message: { type: "string" },
+    },
+    strict: true,
+  });
+
+  if (parsed.positionals.length !== 1) {
+    throw new CliUsageError("Usage: agentloop approve RUN_ID --message TEXT");
+  }
+
+  const message = requireString(parsed.values.message, "--message TEXT");
+  const store = await openRunStore(dependencies);
+  let run = requireRun(store, parsed.positionals[0] ?? "");
+  if (run.status !== "waiting_approval") {
+    throw new CliUsageError(`Run ${run.id} is not waiting for approval`);
+  }
+
+  const approval = exactlyOnePendingApproval(store, run.id);
+  const clock = dependencies.clock ?? new SystemClock();
+  const resolved = store.resolveApproval({
+    id: approval.id,
+    resolvedAt: clock.now().toISOString(),
+    response: message,
+    status: "approved",
+  });
+
+  const currentFingerprint = currentFingerprintFromApproval(resolved);
+  if (resolved.kind === "skill_change" && currentFingerprint !== null) {
+    run = store.updateSkillFingerprint({
+      id: run.id,
+      now: clock.now().toISOString(),
+      skillFingerprint: currentFingerprint,
+    });
+  }
+
+  run = store.transitionRun({
+    expectedStatus: "waiting_approval",
+    id: run.id,
+    nextStatus: "continuing",
+    now: clock.now().toISOString(),
+    reason: `approval ${approval.id} approved`,
+  });
+  const completed = await executeRun({
+    approvalId: approval.id,
+    dependencies,
+    firstTurnKind: "approval-response",
+    io,
+    message,
+    run,
+    store,
+  });
+  io.stdout(renderRun(completed, store.listPendingApprovals(completed.id)));
+  return EXIT_CODES.ok;
+}
+
+async function rejectCommand(
+  args: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<number> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      message: { type: "string" },
+    },
+    strict: true,
+  });
+
+  if (parsed.positionals.length !== 1) {
+    throw new CliUsageError("Usage: agentloop reject RUN_ID --message TEXT");
+  }
+
+  const message = requireString(parsed.values.message, "--message TEXT");
+  const store = await openRunStore(dependencies);
+  const run = requireRun(store, parsed.positionals[0] ?? "");
+  if (run.status !== "waiting_approval") {
+    throw new CliUsageError(`Run ${run.id} is not waiting for approval`);
+  }
+
+  const approval = exactlyOnePendingApproval(store, run.id);
+  const clock = dependencies.clock ?? new SystemClock();
+  store.resolveApproval({
+    id: approval.id,
+    resolvedAt: clock.now().toISOString(),
+    response: message,
+    status: "rejected",
+  });
+  const cancelled = store.transitionRun({
+    expectedStatus: "waiting_approval",
+    id: run.id,
+    nextStatus: "cancelled",
+    now: clock.now().toISOString(),
+    reason: `approval ${approval.id} rejected`,
+  });
+  io.stdout(renderRun(cancelled, store.listPendingApprovals(cancelled.id)));
+  return EXIT_CODES.ok;
+}
+
+function exactlyOnePendingApproval(store: SqliteRunStore, runId: string): ApprovalRequest {
+  const approvals = store.listPendingApprovals(runId);
+  if (approvals.length !== 1) {
+    throw new CliUsageError(
+      `Expected exactly one pending approval for ${runId}, found ${approvals.length}`,
+    );
+  }
+
+  return approvals[0] as ApprovalRequest;
+}
+
+function currentFingerprintFromApproval(approval: ApprovalRequest): string | null {
+  if (
+    typeof approval.evidence === "object" &&
+    approval.evidence !== null &&
+    "currentFingerprint" in approval.evidence &&
+    typeof approval.evidence.currentFingerprint === "string"
+  ) {
+    return approval.evidence.currentFingerprint;
+  }
+
+  return null;
+}
+
 async function statusCommand(
   args: readonly string[],
   dependencies: CliDependencies,
@@ -758,7 +944,12 @@ async function statusCommand(
     throw new CliUsageError(`Run not found: ${runId}`);
   }
 
-  io.stdout(parsed.values.json ? `${JSON.stringify(run, null, 2)}\n` : renderRun(run));
+  const pendingApprovals = store.listPendingApprovals(run.id);
+  io.stdout(
+    parsed.values.json
+      ? `${JSON.stringify({ ...run, pendingApprovals }, null, 2)}\n`
+      : renderRun(run, pendingApprovals),
+  );
   return EXIT_CODES.ok;
 }
 
@@ -790,7 +981,7 @@ async function cancelCommand(
     now,
   });
 
-  io.stdout(renderRun(run));
+  io.stdout(renderRun(run, store.listPendingApprovals(run.id)));
   return EXIT_CODES.ok;
 }
 
@@ -873,12 +1064,12 @@ function renderRunList(runs: readonly RunRecord[]): string {
     .join("\n")}\n`;
 }
 
-function renderRun(run: RunRecord): string {
+function renderRun(run: RunRecord, pendingApprovals: readonly ApprovalRequest[] = []): string {
   const nonCachedTokens =
     run.usage.inputTokens + run.usage.outputTokens + run.usage.reasoningTokens;
   const remainingTurns = Math.max(0, run.limits.maxOuterTurns - run.turnsCompleted);
   const remainingTokens = Math.max(0, run.limits.maxTotalTokens - nonCachedTokens);
-  return [
+  const lines = [
     `run: ${run.id}`,
     `status: ${run.status}`,
     `repo: ${run.repoPath}`,
@@ -889,8 +1080,21 @@ function renderRun(run: RunRecord): string {
     `consecutiveFailures: ${run.consecutiveFailures}`,
     `created: ${run.createdAt}`,
     `updated: ${run.updatedAt}`,
-    "",
-  ].join("\n");
+  ];
+
+  for (const approval of pendingApprovals) {
+    lines.push(
+      `pendingApproval: ${approval.id}`,
+      `approvalKind: ${approval.kind}`,
+      `approvalQuestion: ${approval.question}`,
+      `approvalRisk: ${approval.risk}`,
+      `approvalOperation: ${JSON.stringify(approval.operation)}`,
+      `approvalEvidence: ${JSON.stringify(approval.evidence)}`,
+    );
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }
 
 if (import.meta.main) {

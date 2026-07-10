@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add durable human approval checkpoints with approve/reject commands and approval-response resume prompts.
 - Add run safety limits for turn, token, duration, no-progress, heartbeat renewal, and signal cancellation handling.
 - Add durable thread continuation, explicit resume, recovery prompts, and skill-change blocking for resumed runs.
 - Add foreground Codex dev-team execution with streamed event persistence and strict control-envelope validation.

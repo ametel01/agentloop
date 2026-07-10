@@ -33,7 +33,7 @@ Source: `PLAN.md`
 - [x] Step 4: Codex SDK Adapter and Foreground Coordinator Run
 - [x] Step 5: Continuation, Resume, and Crash Recovery
 - [x] Step 6: Budgets, Circuit Breakers, Heartbeats, and Progress Detection
-- [ ] Step 7: Durable Human Approval Flow
+- [x] Step 7: Durable Human Approval Flow
 - [ ] Step 8: Detached Worker and Lease Recovery
 - [ ] Step 9: Event Inspection and Operator Observability
 - [ ] Step 10: Security and Failure-Mode Hardening
@@ -41,10 +41,10 @@ Source: `PLAN.md`
 
 ## Current Status
 
-- Completed step: Step 6
-- Current implementation focus: Step 7
-- Next step: Step 7: Durable Human Approval Flow
-- Last completed commit: Step 6, `feat: enforce run safety limits`
+- Completed step: Step 7
+- Current implementation focus: Step 8
+- Next step: Step 8: Detached Worker and Lease Recovery
+- Last completed commit: Step 7, `feat: add durable approval checkpoints`
 
 ## Validation Log
 
@@ -178,6 +178,26 @@ Source: `PLAN.md`
 - Changelog: Added entry for run safety limits, progress detection, heartbeat renewal, and signal cancellation handling.
 - Commit: `feat: enforce run safety limits`
 
+### Step 7: Durable Human Approval Flow
+
+- Status: Complete
+- Validation:
+  - `bun run format:check` passed.
+  - `bun run lint` passed.
+  - `bun run typecheck` passed.
+  - `bun run test` passed with 32 tests and 1 skipped opt-in live test.
+  - `bun run build` passed.
+  - `bun run verify` passed.
+- Approval behavior:
+  - `waiting_approval` envelopes persist durable approval records and stop after the current Codex turn.
+  - `status [RUN_ID] --json` and text status render pending approval question, risk, operation, and evidence.
+  - `approve RUN_ID --message TEXT` requires exactly one pending approval, resolves it, transitions through `continuing`, and resumes with an approval-response prompt that names the approval ID and quotes the operator response as data.
+  - `reject RUN_ID --message TEXT` requires exactly one pending approval, records rejection, and cancels the run.
+  - Stale and ambiguous approval commands fail without mutating the run state.
+  - `human-merge` and sensitive-operation approval requirements are included in the fixed coordinator prompt while the SDK approval policy remains `never`.
+- Changelog: Added entry for durable human approval checkpoints, approve/reject commands, and approval-response resume prompts.
+- Commit: `feat: add durable approval checkpoints`
+
 ## Run Notes
 
 - Baseline quality gates: established in Step 1 and passing.
@@ -185,4 +205,4 @@ Source: `PLAN.md`
 - SDK import compatibility: `@openai/codex-sdk@0.144.1` imports under Bun during `doctor`.
 - Live SDK smoke test: skipped in Step 4 because model calls were not explicitly authorized.
 - Migration version: 1.
-- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, and signal cancellation exist; detached worker recovery and full approval command handling are not implemented yet.
+- Known durability limitations: continuation, explicit resume/recovery, budgets, progress fingerprinting, heartbeat renewal, signal cancellation, and durable approval handling exist; detached worker recovery is not implemented yet.

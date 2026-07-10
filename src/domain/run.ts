@@ -52,6 +52,9 @@ export interface ApprovalRequest {
   operation: unknown;
   evidence: unknown;
   status: ApprovalStatus;
+  requestedAt: string;
+  resolvedAt: string | null;
+  response: string | null;
 }
 
 export interface TurnRecord {

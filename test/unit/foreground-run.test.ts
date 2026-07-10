@@ -8,6 +8,8 @@ import { REQUIRED_SKILLS } from "../../src/application/doctor.ts";
 import type { Clock, IdGenerator } from "../../src/application/ports.ts";
 import { runCli } from "../../src/cli.ts";
 import type { CodexRunInput, CodexRunner } from "../../src/codex/client.ts";
+import { openDatabase } from "../../src/infrastructure/sqlite/database.ts";
+import { SqliteRunStore } from "../../src/infrastructure/sqlite/run-store.ts";
 import { FakeCommandRunner, FakeFileSystem } from "../support/fakes.ts";
 
 const tempDirs: string[] = [];
@@ -205,6 +207,181 @@ describe("foreground run", () => {
     });
     const run = JSON.parse(statusJson.join("")) as { status: string };
     expect(run.status).toBe("waiting_approval");
+  });
+
+  test("persists waiting approval envelopes without continuing Codex work", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner(waitingApprovalEvents());
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "needs approval", "--trust-repo"],
+      createDependencies(codexRunner),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(1);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      status: string;
+      pendingApprovals: Array<{ kind: string; question: string }>;
+    };
+    expect(run.status).toBe("waiting_approval");
+    expect(run.pendingApprovals).toHaveLength(1);
+    expect(run.pendingApprovals[0]?.kind).toBe("human_merge");
+  });
+
+  test("approves exactly one pending approval and resumes with approval-response prompt", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "approve me", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(waitingApprovalEvents())),
+      quietIo(),
+    );
+
+    const approveRunner = new FakeCodexRunner(completeWithoutThreadStartedEvents());
+    const exitCode = await runCli(
+      ["approve", "id-1", "--message", "approved for test"],
+      createDependencies(approveRunner),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(approveRunner.inputs).toHaveLength(1);
+    expect(approveRunner.inputs[0]?.threadId).toBe("thread-1");
+    expect(approveRunner.inputs[0]?.prompt).toContain("Approval ID: id-4");
+    expect(approveRunner.inputs[0]?.prompt).toContain("approved for test");
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      status: string;
+      pendingApprovals: unknown[];
+    };
+    expect(run.status).toBe("complete");
+    expect(run.pendingApprovals).toHaveLength(0);
+  });
+
+  test("rejects a pending approval and cancels the run", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "reject me", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(waitingApprovalEvents())),
+      quietIo(),
+    );
+
+    const exitCode = await runCli(
+      ["reject", "id-1", "--message", "not approved"],
+      createDependencies(new FakeCodexRunner([])),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string };
+    expect(run.status).toBe("cancelled");
+  });
+
+  test("fails stale approval commands without state mutation", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "stale approval", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(waitingApprovalEvents())),
+      quietIo(),
+    );
+    await runCli(
+      ["reject", "id-1", "--message", "no"],
+      createDependencies(new FakeCodexRunner([])),
+      quietIo(),
+    );
+
+    const stderr: string[] = [];
+    const exitCode = await runCli(
+      ["approve", "id-1", "--message", "too late"],
+      createDependencies(new FakeCodexRunner([])),
+      {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(64);
+    expect(stderr.join("")).toContain("not waiting for approval");
+  });
+
+  test("fails ambiguous approval commands without state mutation", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "ambiguous approval", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(waitingApprovalEvents())),
+      quietIo(),
+    );
+
+    const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
+    const store = new SqliteRunStore(database);
+    store.createApproval({
+      evidenceJson: "{}",
+      id: "manual-approval",
+      kind: "manual",
+      operationJson: "{}",
+      question: "Second approval?",
+      requestedAt: "2026-07-10T00:00:00.000Z",
+      risk: "Ambiguous",
+      runId: "id-1",
+    });
+    database.close();
+
+    const stderr: string[] = [];
+    const exitCode = await runCli(
+      ["approve", "id-1", "--message", "approved"],
+      createDependencies(new FakeCodexRunner([])),
+      {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(64);
+    expect(stderr.join("")).toContain("found 2");
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      status: string;
+      pendingApprovals: unknown[];
+    };
+    expect(run.status).toBe("waiting_approval");
+    expect(run.pendingApprovals).toHaveLength(2);
   });
 
   test("stops before a continuation when the turn budget is exhausted", async () => {
@@ -426,6 +603,47 @@ function completeWithoutThreadStartedEvents(): ThreadEvent[] {
 
 function continueEvents(): ThreadEvent[] {
   return completeEnvelopeEvents({ includeThreadStarted: true, status: "continue" });
+}
+
+function waitingApprovalEvents(): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      item: {
+        id: "message-1",
+        text: JSON.stringify({
+          approval: {
+            kind: "human_merge",
+            operation: { merge: true, pr: 123 },
+            question: "Approve merge?",
+            risk: "Merges code",
+          },
+          blocker: null,
+          closureGatePassed: false,
+          evidence: {
+            issueUrls: [],
+            prUrls: ["https://github.com/example/repo/pull/123"],
+            reviewUrls: [],
+            statusPath: "STATUS.md",
+          },
+          status: "waiting_approval",
+          summary: "Needs merge approval",
+        }),
+        type: "agent_message",
+      },
+      type: "item.completed",
+    },
+    {
+      type: "turn.completed",
+      usage: {
+        cached_input_tokens: 0,
+        input_tokens: 10,
+        output_tokens: 5,
+        reasoning_output_tokens: 1,
+      },
+    },
+  ];
 }
 
 function completeEnvelopeEvents(options: {

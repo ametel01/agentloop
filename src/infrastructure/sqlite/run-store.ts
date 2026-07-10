@@ -42,6 +42,20 @@ interface RunRow {
   last_error: string | null;
 }
 
+interface ApprovalRow {
+  id: string;
+  run_id: string;
+  kind: string;
+  question: string;
+  risk: string;
+  operation_json: string;
+  evidence_json: string;
+  status: "pending" | "approved" | "rejected";
+  requested_at: string;
+  resolved_at: string | null;
+  response: string | null;
+}
+
 export interface RunStore {
   createRun(input: CreateRunInput): RunRecord;
   getRun(id: string): RunRecord | null;
@@ -57,6 +71,8 @@ export interface RunStore {
   appendEvent(input: AppendEventInput): EventRecord;
   recordThreadStarted(input: RecordThreadStartedInput): EventRecord;
   createApproval(input: CreateApprovalInput): ApprovalRequest;
+  listPendingApprovals(runId: string): ApprovalRequest[];
+  resolveApproval(input: ResolveApprovalInput): ApprovalRequest;
   acquireLease(input: AcquireLeaseInput): void;
   releaseLease(repoKey: string, ownerId: string): void;
 }
@@ -132,6 +148,13 @@ export interface CreateApprovalInput {
   operationJson: string;
   evidenceJson: string;
   requestedAt: string;
+}
+
+export interface ResolveApprovalInput {
+  id: string;
+  status: "approved" | "rejected";
+  response: string;
+  resolvedAt: string;
 }
 
 export interface AcquireLeaseInput {
@@ -580,16 +603,50 @@ export class SqliteRunStore implements RunStore {
         input.requestedAt,
       );
 
-    return {
-      id: input.id,
-      runId: input.runId,
-      kind: input.kind,
-      question: input.question,
-      risk: input.risk,
-      operation: JSON.parse(input.operationJson),
-      evidence: JSON.parse(input.evidenceJson),
-      status: "pending",
-    };
+    const approval = this.database
+      .query<ApprovalRow, [string]>("SELECT * FROM approvals WHERE id = ?")
+      .get(input.id);
+    if (approval === null) {
+      throw new StateConflictError(`Approval ${input.id} could not be created`);
+    }
+
+    return mapApproval(approval);
+  }
+
+  listPendingApprovals(runId: string): ApprovalRequest[] {
+    return this.database
+      .query<ApprovalRow, [string]>(
+        "SELECT * FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY requested_at ASC",
+      )
+      .all(runId)
+      .map(mapApproval);
+  }
+
+  resolveApproval(input: ResolveApprovalInput): ApprovalRequest {
+    const result = this.database
+      .query(
+        `
+        UPDATE approvals
+        SET status = ?,
+            resolved_at = ?,
+            response = ?
+        WHERE id = ? AND status = 'pending'
+      `,
+      )
+      .run(input.status, input.resolvedAt, input.response, input.id);
+
+    if (result.changes !== 1) {
+      throw new StateConflictError(`Approval ${input.id} is not pending`);
+    }
+
+    const approval = this.database
+      .query<ApprovalRow, [string]>("SELECT * FROM approvals WHERE id = ?")
+      .get(input.id);
+    if (approval === null) {
+      throw new StateConflictError(`Approval ${input.id} does not exist`);
+    }
+
+    return mapApproval(approval);
   }
 
   acquireLease(input: AcquireLeaseInput): void {
@@ -679,5 +736,21 @@ function mapTurn(row: TurnRow): TurnRecord {
     promptHash: row.prompt_hash,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+  };
+}
+
+function mapApproval(row: ApprovalRow): ApprovalRequest {
+  return {
+    evidence: JSON.parse(row.evidence_json),
+    id: row.id,
+    kind: row.kind,
+    operation: JSON.parse(row.operation_json),
+    question: row.question,
+    requestedAt: row.requested_at,
+    resolvedAt: row.resolved_at,
+    response: row.response,
+    risk: row.risk,
+    runId: row.run_id,
+    status: row.status,
   };
 }
