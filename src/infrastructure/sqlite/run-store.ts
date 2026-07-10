@@ -45,8 +45,11 @@ interface RunRow {
 export interface RunStore {
   createRun(input: CreateRunInput): RunRecord;
   getRun(id: string): RunRecord | null;
+  countEvents(runId: string): number;
+  countTurns(runId: string): number;
   listRuns(limit: number): RunRecord[];
   transitionRun(input: TransitionRunInput): RunRecord;
+  updateSkillFingerprint(input: UpdateSkillFingerprintInput): RunRecord;
   updateUsage(input: UpdateUsageInput): RunRecord;
   createTurn(input: CreateTurnInput): TurnRecord;
   completeTurn(input: CompleteTurnInput): TurnRecord;
@@ -62,6 +65,12 @@ export interface TransitionRunInput {
   expectedStatus: RunStatus;
   nextStatus: RunStatus;
   reason: string;
+  now: string;
+}
+
+export interface UpdateSkillFingerprintInput {
+  id: string;
+  skillFingerprint: string;
   now: string;
 }
 
@@ -224,6 +233,22 @@ export class SqliteRunStore implements RunStore {
     return row === null ? null : mapRun(row);
   }
 
+  countEvents(runId: string): number {
+    return (
+      this.database
+        .query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM events WHERE run_id = ?")
+        .get(runId)?.count ?? 0
+    );
+  }
+
+  countTurns(runId: string): number {
+    return (
+      this.database
+        .query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM turns WHERE run_id = ?")
+        .get(runId)?.count ?? 0
+    );
+  }
+
   listRuns(limit: number): RunRecord[] {
     return this.database
       .query<RunRow, [number]>("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?")
@@ -282,6 +307,19 @@ export class SqliteRunStore implements RunStore {
       this.database.run("ROLLBACK");
       throw error;
     }
+  }
+
+  updateSkillFingerprint(input: UpdateSkillFingerprintInput): RunRecord {
+    this.database
+      .query("UPDATE runs SET skill_fingerprint = ?, updated_at = ? WHERE id = ?")
+      .run(input.skillFingerprint, input.now, input.id);
+
+    const run = this.getRun(input.id);
+    if (run === null) {
+      throw new StateConflictError(`Run ${input.id} does not exist`);
+    }
+
+    return run;
   }
 
   updateUsage(input: UpdateUsageInput): RunRecord {

@@ -1,6 +1,34 @@
 import type { RunRecord } from "../domain/run.ts";
 
 export function buildInitialPrompt(run: RunRecord): string {
+  return `${promptHeader(run)}
+
+Start the dev-team goal. Use live repository, GitHub, and STATUS.md state as authoritative.`;
+}
+
+export function buildContinuationPrompt(run: RunRecord): string {
+  return `${promptHeader(run)}
+
+Continue the same dev-team goal from the current thread. Re-read durable state before taking new side effects, then return the final control envelope for this outer turn.`;
+}
+
+export function buildRecoveryPrompt(run: RunRecord, message: string | null): string {
+  const operatorMessage =
+    message === null
+      ? ""
+      : `
+
+Operator resume message, quoted as task data:
+<operator_message>
+${message}
+</operator_message>`;
+
+  return `${promptHeader(run)}
+
+This is a recovery turn after an interrupted or stopped outer turn. Before any new side effect, reconcile STATUS.md, GitHub issues and PRs, branches, and worktrees. Reuse existing PRs, branches, and worktrees when live state shows they already exist. Do not replay the original initial prompt after a started thread interruption.${operatorMessage}`;
+}
+
+function promptHeader(run: RunRecord): string {
   return `Use $codex-dev-team-goal.
 
 Repository: ${run.repoPath}

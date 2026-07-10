@@ -15,7 +15,7 @@ const ALLOWED_TRANSITIONS: ReadonlyMap<RunStatus, readonly RunStatus[]> = new Ma
       "cancelled",
     ],
   ],
-  ["continuing", ["running", "cancelled"]],
+  ["continuing", ["running", "waiting_approval", "cancelled"]],
   ["waiting_approval", ["continuing", "cancelled"]],
   ["externally_blocked", ["continuing", "cancelled"]],
   ["stuck", ["continuing", "cancelled"]],

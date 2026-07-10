@@ -82,9 +82,136 @@ describe("foreground run", () => {
     expect(run.status).toBe("failed");
     expect(run.lastError).toContain("Malformed control envelope JSON");
   });
+
+  test("continues on the same durable thread after a continue envelope", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner([
+      continueEvents(),
+      completeWithoutThreadStartedEvents(),
+    ]);
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "continue once", "--trust-repo"],
+      createDependencies(codexRunner),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(2);
+    expect(codexRunner.inputs[0]?.threadId).toBeNull();
+    expect(codexRunner.inputs[1]?.threadId).toBe("thread-1");
+    expect(codexRunner.inputs[1]?.prompt).toContain("Continue the same dev-team goal");
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string; turnsCompleted: number };
+    expect(run.status).toBe("complete");
+    expect(run.turnsCompleted).toBe(2);
+  });
+
+  test("resumes a failed run with a saved thread ID using the recovery prompt", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "recover saved thread", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(malformedEvents())),
+      quietIo(),
+    );
+
+    const resumeRunner = new FakeCodexRunner(completeWithoutThreadStartedEvents());
+    const exitCode = await runCli(
+      ["resume", "id-1", "--message", "operator context"],
+      createDependencies(resumeRunner),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(resumeRunner.inputs).toHaveLength(1);
+    expect(resumeRunner.inputs[0]?.threadId).toBe("thread-1");
+    expect(resumeRunner.inputs[0]?.prompt).toContain("This is a recovery turn");
+    expect(resumeRunner.inputs[0]?.prompt).toContain("operator context");
+  });
+
+  test("starts a new recovery thread when interruption happened before thread.started", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "recover before thread", "--trust-repo"],
+      createDependencies(new ThrowingCodexRunner("spawn failed")),
+      quietIo(),
+    );
+
+    const resumeRunner = new FakeCodexRunner(completeEvents());
+    const exitCode = await runCli(["resume", "id-1"], createDependencies(resumeRunner), quietIo());
+
+    expect(exitCode).toBe(0);
+    expect(resumeRunner.inputs[0]?.threadId).toBeNull();
+    expect(resumeRunner.inputs[0]?.prompt).toContain("This is a recovery turn");
+  });
+
+  test("refuses resume when SDK events exist without a durable thread ID", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "unsafe resume", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(eventThenErrorEvents())),
+      quietIo(),
+    );
+
+    const stderr: string[] = [];
+    const exitCode = await runCli(["resume", "id-1"], createDependencies(new FakeCodexRunner([])), {
+      stdout: () => {},
+      stderr: (message) => stderr.push(message),
+    });
+
+    expect(exitCode).toBe(64);
+    expect(stderr.join("")).toContain("events but no durable thread ID");
+  });
+
+  test("blocks resume with a durable approval when skill fingerprints changed", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "skill drift", "--trust-repo"],
+      createDependencies(new ThrowingCodexRunner("spawn failed"), "v1"),
+      quietIo(),
+    );
+
+    const exitCode = await runCli(
+      ["resume", "id-1"],
+      createDependencies(new FakeCodexRunner([]), "v2"),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(2);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([]), "v2"), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { status: string };
+    expect(run.status).toBe("waiting_approval");
+  });
 });
 
-function createDependencies(codexRunner: FakeCodexRunner) {
+function createDependencies<TCodexRunner extends CodexRunner>(
+  codexRunner: TCodexRunner,
+  skillVersion = "v1",
+) {
   const homeDir = "/home/alex";
   const repoPath = "/work/agentloop";
   const fileSystem = new FakeFileSystem();
@@ -93,7 +220,7 @@ function createDependencies(codexRunner: FakeCodexRunner) {
   for (const skillName of REQUIRED_SKILLS) {
     fileSystem.addFile(
       resolve(homeDir, ".agents", "skills", skillName, "SKILL.md"),
-      `---\nname: ${skillName}\n---\n`,
+      `---\nname: ${skillName}\nversion: ${skillVersion}\n---\n`,
     );
   }
 
@@ -146,8 +273,25 @@ function quietIo() {
 }
 
 function completeEvents(): ThreadEvent[] {
-  return [
-    { thread_id: "thread-1", type: "thread.started" },
+  return completeEnvelopeEvents({ includeThreadStarted: true, status: "complete" });
+}
+
+function completeWithoutThreadStartedEvents(): ThreadEvent[] {
+  return completeEnvelopeEvents({ includeThreadStarted: false, status: "complete" });
+}
+
+function continueEvents(): ThreadEvent[] {
+  return completeEnvelopeEvents({ includeThreadStarted: true, status: "continue" });
+}
+
+function completeEnvelopeEvents(options: {
+  includeThreadStarted: boolean;
+  status: "complete" | "continue";
+}): ThreadEvent[] {
+  const events: ThreadEvent[] = [
+    ...(options.includeThreadStarted
+      ? ([{ thread_id: "thread-1", type: "thread.started" }] satisfies ThreadEvent[])
+      : []),
     { type: "turn.started" },
     {
       item: {
@@ -155,15 +299,15 @@ function completeEvents(): ThreadEvent[] {
         text: JSON.stringify({
           approval: null,
           blocker: null,
-          closureGatePassed: true,
+          closureGatePassed: options.status === "complete",
           evidence: {
             issueUrls: [],
             prUrls: [],
             reviewUrls: [],
             statusPath: "STATUS.md",
           },
-          status: "complete",
-          summary: "done",
+          status: options.status,
+          summary: options.status === "complete" ? "done" : "continue",
         }),
         type: "agent_message",
       },
@@ -179,6 +323,7 @@ function completeEvents(): ThreadEvent[] {
       },
     },
   ];
+  return events;
 }
 
 function malformedEvents(): ThreadEvent[] {
@@ -204,20 +349,50 @@ function malformedEvents(): ThreadEvent[] {
   ];
 }
 
+function eventThenErrorEvents(): ThreadEvent[] {
+  return [
+    { type: "turn.started" },
+    {
+      message: "stream failed after event",
+      type: "error",
+    },
+  ];
+}
+
 class FakeCodexRunner implements CodexRunner {
   readonly inputs: CodexRunInput[] = [];
+  private nextBatch = 0;
 
-  constructor(private readonly events: readonly ThreadEvent[]) {}
+  constructor(events: readonly ThreadEvent[] | readonly (readonly ThreadEvent[])[]) {
+    this.eventBatches = Array.isArray(events[0])
+      ? (events as readonly (readonly ThreadEvent[])[])
+      : [events as readonly ThreadEvent[]];
+  }
+
+  private readonly eventBatches: readonly (readonly ThreadEvent[])[];
 
   async runStreamed(input: CodexRunInput): Promise<AsyncIterable<ThreadEvent>> {
     this.inputs.push(input);
-    return this.eventStream();
+    const events = this.eventBatches[this.nextBatch] ?? [];
+    this.nextBatch += 1;
+    return this.eventStream(events);
   }
 
-  private async *eventStream(): AsyncGenerator<ThreadEvent> {
-    for (const event of this.events) {
+  private async *eventStream(events: readonly ThreadEvent[]): AsyncGenerator<ThreadEvent> {
+    for (const event of events) {
       yield event;
     }
+  }
+}
+
+class ThrowingCodexRunner implements CodexRunner {
+  readonly inputs: CodexRunInput[] = [];
+
+  constructor(private readonly message: string) {}
+
+  async runStreamed(input: CodexRunInput): Promise<AsyncIterable<ThreadEvent>> {
+    this.inputs.push(input);
+    throw new Error(this.message);
   }
 }
 

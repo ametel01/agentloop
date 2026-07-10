@@ -11,7 +11,11 @@ import type { Clock, IdGenerator } from "./application/ports.ts";
 import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "./codex/control-envelope.ts";
 import { ProductionCodexRunner, type CodexRunner } from "./codex/client.ts";
 import { agentMessageText, eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
-import { buildInitialPrompt } from "./codex/prompt-builder.ts";
+import {
+  buildContinuationPrompt,
+  buildInitialPrompt,
+  buildRecoveryPrompt,
+} from "./codex/prompt-builder.ts";
 import { buildThreadOptions } from "./codex/thread-options.ts";
 import { AgentloopError, CliUsageError } from "./domain/errors.ts";
 import { DEFAULT_RUN_LIMITS, type RunLimits, type RunRecord, type RunUsage } from "./domain/run.ts";
@@ -34,13 +38,15 @@ Usage:
   agentloop --help
   agentloop --version
   agentloop doctor --repo PATH [--json]
-  agentloop run --repo PATH --goal TEXT --trust-repo --detach [--model MODEL]
+  agentloop run --repo PATH --goal TEXT --trust-repo [--detach] [--model MODEL]
+  agentloop resume RUN_ID [--message TEXT] [--accept-skill-change]
   agentloop status [RUN_ID] [--json]
   agentloop cancel RUN_ID [--reason TEXT]
 
 Commands:
   doctor   Run read-only repository, toolchain, GitHub, SDK, and skill preflight checks.
-  run      Create a durable run. Step 3 supports --detach only.
+  run      Create a durable run, or execute it immediately without --detach.
+  resume   Resume a continuing, interrupted, blocked, stuck, exhausted, or failed run.
   status   Show durable run status.
   cancel   Cancel a queued run.
 `;
@@ -107,6 +113,8 @@ async function runCliUnsafe(
       return await runDoctorCommand(commandArgs, dependencies, io);
     case "run":
       return await runCommand(commandArgs, dependencies, io);
+    case "resume":
+      return await resumeCommand(commandArgs, dependencies, io);
     case "status":
       return await statusCommand(commandArgs, dependencies, io);
     case "cancel":
@@ -212,48 +220,94 @@ async function runCommand(
     return EXIT_CODES.ok;
   }
 
-  const completed = await executeForegroundRun(run, store, dependencies, io);
+  const completed = await executeRun({
+    dependencies,
+    firstTurnKind: "initial",
+    io,
+    message: null,
+    run,
+    store,
+  });
   io.stdout(renderRun(completed));
   return EXIT_CODES.ok;
 }
 
-async function executeForegroundRun(
-  queuedRun: RunRecord,
-  store: SqliteRunStore,
-  dependencies: CliDependencies,
-  io: CliIo,
-): Promise<RunRecord> {
+interface ExecuteRunInput {
+  run: RunRecord;
+  store: SqliteRunStore;
+  dependencies: CliDependencies;
+  io: CliIo;
+  firstTurnKind: TurnKind;
+  message: string | null;
+}
+
+type TurnKind = "initial" | "continuation" | "recovery";
+
+async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
+  const { store, dependencies, io } = input;
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
   const ownerId = `${hostname()}:${process.pid}:${idGenerator.randomId()}`;
   const acquiredAt = clock.now();
-  const expiresAt = new Date(acquiredAt.getTime() + queuedRun.limits.leaseTtlMs);
+  const expiresAt = new Date(acquiredAt.getTime() + input.run.limits.leaseTtlMs);
   store.acquireLease({
     acquiredAt: acquiredAt.toISOString(),
     expiresAt: expiresAt.toISOString(),
     ownerId,
-    repoKey: queuedRun.repoKey,
-    runId: queuedRun.id,
+    repoKey: input.run.repoKey,
+    runId: input.run.id,
   });
 
-  let runningRun = store.transitionRun({
-    expectedStatus: "queued",
-    id: queuedRun.id,
-    nextStatus: "running",
-    now: clock.now().toISOString(),
-    reason: "foreground run started",
-  });
+  let currentRun = input.run;
+  let currentTurnKind = input.firstTurnKind;
+
+  try {
+    while (true) {
+      currentRun = transitionToRunningForExecution(store, currentRun, clock.now().toISOString());
+      currentRun = await executeSingleTurn({
+        dependencies,
+        io,
+        message: input.message,
+        run: currentRun,
+        store,
+        turnKind: currentTurnKind,
+      });
+
+      if (currentRun.status !== "continuing") {
+        return currentRun;
+      }
+
+      currentTurnKind = "continuation";
+    }
+  } finally {
+    store.releaseLease(input.run.repoKey, ownerId);
+  }
+}
+
+interface ExecuteSingleTurnInput {
+  run: RunRecord;
+  store: SqliteRunStore;
+  dependencies: CliDependencies;
+  io: CliIo;
+  turnKind: TurnKind;
+  message: string | null;
+}
+
+async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunRecord> {
+  const { run, store, dependencies, io, turnKind } = input;
+  const clock = dependencies.clock ?? new SystemClock();
+  const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
   const turnId = idGenerator.randomId();
-  const prompt = buildInitialPrompt(runningRun);
+  const prompt = buildPrompt(turnKind, run, input.message);
   store.createTurn({
     fingerprintBefore: null,
     id: turnId,
-    kind: "initial",
+    kind: turnKind,
     promptHash: sha256Hex(prompt),
-    runId: runningRun.id,
+    runId: run.id,
     startedAt: clock.now().toISOString(),
     status: "running",
-    turnNumber: runningRun.turnsCompleted + 1,
+    turnNumber: store.countTurns(run.id) + 1,
   });
 
   let finalText: string | null = null;
@@ -264,11 +318,12 @@ async function executeForegroundRun(
     const events = await runner.runStreamed({
       outputSchema: CONTROL_ENVELOPE_SCHEMA,
       prompt,
+      threadId: turnKind === "initial" ? null : run.threadId,
       threadOptions: buildThreadOptions({
-        model: runningRun.model,
-        reasoningEffort: runningRun.reasoningEffort,
-        repoPath: runningRun.repoPath,
-        worktreeRoot: runningRun.worktreeRoot,
+        model: run.model,
+        reasoningEffort: run.reasoningEffort,
+        repoPath: run.repoPath,
+        worktreeRoot: run.worktreeRoot,
       }),
     });
 
@@ -280,7 +335,7 @@ async function executeForegroundRun(
           eventType: event.type,
           itemId: null,
           payloadJson: eventPayloadJson(event),
-          runId: runningRun.id,
+          runId: run.id,
           threadId: event.thread_id,
           turnId,
         });
@@ -290,7 +345,7 @@ async function executeForegroundRun(
           eventType: event.type,
           itemId: eventItemId(event),
           payloadJson: eventPayloadJson(event),
-          runId: runningRun.id,
+          runId: run.id,
           turnId,
         });
       }
@@ -321,14 +376,14 @@ async function executeForegroundRun(
       status: "completed",
       usage,
     });
-    runningRun = store.updateUsage({
-      id: runningRun.id,
+    const updatedRun = store.updateUsage({
+      id: run.id,
       now: clock.now().toISOString(),
       usageDelta: usage,
     });
     return store.transitionRun({
       expectedStatus: "running",
-      id: runningRun.id,
+      id: updatedRun.id,
       nextStatus: envelopeStatusToRunStatus(envelope.status),
       now: clock.now().toISOString(),
       reason: envelope.summary,
@@ -346,14 +401,52 @@ async function executeForegroundRun(
     });
     store.transitionRun({
       expectedStatus: "running",
-      id: runningRun.id,
+      id: run.id,
       nextStatus: "failed",
       now: clock.now().toISOString(),
       reason: message,
     });
     throw error;
-  } finally {
-    store.releaseLease(queuedRun.repoKey, ownerId);
+  }
+}
+
+function buildPrompt(turnKind: TurnKind, run: RunRecord, message: string | null): string {
+  switch (turnKind) {
+    case "initial":
+      return buildInitialPrompt(run);
+    case "continuation":
+      return buildContinuationPrompt(run);
+    case "recovery":
+      return buildRecoveryPrompt(run, message);
+  }
+}
+
+function transitionToRunningForExecution(
+  store: SqliteRunStore,
+  run: RunRecord,
+  now: string,
+): RunRecord {
+  switch (run.status) {
+    case "queued":
+      return store.transitionRun({
+        expectedStatus: "queued",
+        id: run.id,
+        nextStatus: "running",
+        now,
+        reason: "foreground run started",
+      });
+    case "continuing":
+      return store.transitionRun({
+        expectedStatus: "continuing",
+        id: run.id,
+        nextStatus: "running",
+        now,
+        reason: "continuation started",
+      });
+    case "running":
+      return run;
+    default:
+      throw new CliUsageError(`Run ${run.id} with status ${run.status} cannot start a turn`);
   }
 }
 
@@ -379,6 +472,140 @@ function zeroUsage(): RunUsage {
     outputTokens: 0,
     reasoningTokens: 0,
   };
+}
+
+async function resumeCommand(
+  args: readonly string[],
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<number> {
+  const parsed = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      "accept-skill-change": { type: "boolean", default: false },
+      message: { type: "string" },
+    },
+    strict: true,
+  });
+
+  if (parsed.positionals.length !== 1) {
+    throw new CliUsageError(
+      "Usage: agentloop resume RUN_ID [--message TEXT] [--accept-skill-change]",
+    );
+  }
+
+  const store = await openRunStore(dependencies);
+  const runId = parsed.positionals[0] ?? "";
+  let run = requireRun(store, runId);
+  if (run.status === "complete" || run.status === "cancelled" || run.status === "queued") {
+    throw new CliUsageError(`Run ${run.id} with status ${run.status} cannot be resumed`);
+  }
+
+  const report = await runDoctor({ repo: run.repoPath }, dependencies);
+  const exitCode = doctorExitCode(report);
+  if (exitCode !== 0 || report.skillManifestHash === null) {
+    io.stdout(renderDoctorText(report));
+    return exitCode;
+  }
+
+  const clock = dependencies.clock ?? new SystemClock();
+  if (report.skillManifestHash !== run.skillFingerprint) {
+    run = transitionToContinuingForResume(store, run, clock.now().toISOString());
+
+    if (!parsed.values["accept-skill-change"]) {
+      const approvalId = (dependencies.idGenerator ?? new RandomIdGenerator()).randomId();
+      store.createApproval({
+        evidenceJson: JSON.stringify({
+          currentFingerprint: report.skillManifestHash,
+          previousFingerprint: run.skillFingerprint,
+        }),
+        id: approvalId,
+        kind: "skill_change",
+        operationJson: JSON.stringify({ acceptSkillChange: true, runId: run.id }),
+        question:
+          "Required skill files changed since this run started. Resume with the new skill fingerprint?",
+        requestedAt: clock.now().toISOString(),
+        risk: "Continuation behavior may differ from the original run because installed skills changed.",
+        runId: run.id,
+      });
+      const waiting = store.transitionRun({
+        expectedStatus: "continuing",
+        id: run.id,
+        nextStatus: "waiting_approval",
+        now: clock.now().toISOString(),
+        reason: "skill fingerprint changed",
+      });
+      io.stdout(renderRun(waiting));
+      return 2;
+    }
+
+    run = store.updateSkillFingerprint({
+      id: run.id,
+      now: clock.now().toISOString(),
+      skillFingerprint: report.skillManifestHash,
+    });
+  }
+
+  const turnKind = determineResumeTurnKind(store, run);
+  run = transitionToContinuingForResume(store, run, clock.now().toISOString());
+  const completed = await executeRun({
+    dependencies,
+    firstTurnKind: turnKind,
+    io,
+    message: parsed.values.message ?? null,
+    run,
+    store,
+  });
+  io.stdout(renderRun(completed));
+  return EXIT_CODES.ok;
+}
+
+function transitionToContinuingForResume(
+  store: SqliteRunStore,
+  run: RunRecord,
+  now: string,
+): RunRecord {
+  switch (run.status) {
+    case "continuing":
+      return run;
+    case "running":
+      return store.transitionRun({
+        expectedStatus: "running",
+        id: run.id,
+        nextStatus: "continuing",
+        now,
+        reason: "resume requested",
+      });
+    case "externally_blocked":
+    case "stuck":
+    case "budget_exhausted":
+    case "failed":
+      return store.transitionRun({
+        expectedStatus: run.status,
+        id: run.id,
+        nextStatus: "continuing",
+        now,
+        reason: "resume requested",
+      });
+    default:
+      throw new CliUsageError(`Run ${run.id} with status ${run.status} cannot be resumed`);
+  }
+}
+
+function determineResumeTurnKind(store: SqliteRunStore, run: RunRecord): TurnKind {
+  if (run.status === "continuing") {
+    return "continuation";
+  }
+
+  const eventCount = store.countEvents(run.id);
+  if (run.threadId === null && eventCount > 0) {
+    throw new CliUsageError(
+      `Run ${run.id} has SDK events but no durable thread ID; refusing unsafe resume`,
+    );
+  }
+
+  return "recovery";
 }
 
 async function statusCommand(
@@ -454,6 +681,15 @@ async function openRunStore(dependencies: CliDependencies): Promise<SqliteRunSto
   const stateDir = resolveStateDir(home, process.env);
   const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
   return new SqliteRunStore(database);
+}
+
+function requireRun(store: SqliteRunStore, runId: string): RunRecord {
+  const run = store.getRun(runId);
+  if (run === null) {
+    throw new CliUsageError(`Run not found: ${runId}`);
+  }
+
+  return run;
 }
 
 function requireString(value: string | undefined, label: string): string {
