@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export function migrate(database: Database): void {
   applyPragmas(database);
@@ -38,6 +38,13 @@ export function migrate(database: Database): void {
       database
         .query("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
         .run(3, new Date().toISOString());
+    }
+
+    if (version < 4) {
+      applyMigration4(database);
+      database
+        .query("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+        .run(4, new Date().toISOString());
     }
 
     database.run("COMMIT");
@@ -79,6 +86,31 @@ function applyMigration3(database: Database): void {
     )
   `);
   database.run("CREATE INDEX outcomes_type_idx ON outcomes(run_id, type)");
+}
+
+function applyMigration4(database: Database): void {
+  database.run(`
+    CREATE TABLE evidence_cache(
+      repo_key TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      run_id TEXT NOT NULL REFERENCES runs(id),
+      kind TEXT NOT NULL,
+      gate_name TEXT NOT NULL,
+      gate_version TEXT NOT NULL,
+      head_sha TEXT NULL,
+      stable_patch_id TEXT NULL,
+      relevant_input_digest TEXT NOT NULL,
+      environment_fingerprint TEXT NOT NULL,
+      result TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      reusable_failure_signature TEXT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL,
+      PRIMARY KEY(repo_key, cache_key)
+    )
+  `);
+  database.run("CREATE INDEX evidence_cache_recent_idx ON evidence_cache(repo_key, last_used_at)");
 }
 
 export function applyPragmas(database: Database): void {

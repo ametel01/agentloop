@@ -3,6 +3,18 @@ export interface ControlCheckpoint {
   summary: string;
   agents: ControlEnvelope["agents"];
   outcomes: string[];
+  evidenceRecords: Array<{
+    kind: "blocker" | "gate";
+    gateName: string;
+    gateVersion: string;
+    headSha: string | null;
+    stablePatchId: string | null;
+    relevantInputDigest: string;
+    environmentFingerprint: string;
+    result: "blocked" | "failed" | "passed";
+    summary: string;
+    reusableFailureSignature: string | null;
+  }>;
   approval: ControlEnvelope["approval"];
   blocker: ControlEnvelope["blocker"];
   reviewCycle: null | {
@@ -153,6 +165,7 @@ export const CONTROL_ENVELOPE_SCHEMA = {
         "summary",
         "agents",
         "outcomes",
+        "evidenceRecords",
         "approval",
         "blocker",
         "reviewCycle",
@@ -164,6 +177,37 @@ export const CONTROL_ENVELOPE_SCHEMA = {
         summary: { type: "string" },
         agents: agentsSchema(),
         outcomes: { type: "array", items: { type: "string" } },
+        evidenceRecords: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "kind",
+              "gateName",
+              "gateVersion",
+              "headSha",
+              "stablePatchId",
+              "relevantInputDigest",
+              "environmentFingerprint",
+              "result",
+              "summary",
+              "reusableFailureSignature",
+            ],
+            properties: {
+              kind: { type: "string", enum: ["blocker", "gate"] },
+              gateName: { type: "string" },
+              gateVersion: { type: "string" },
+              headSha: { anyOf: [{ type: "null" }, { type: "string" }] },
+              stablePatchId: { anyOf: [{ type: "null" }, { type: "string" }] },
+              relevantInputDigest: { type: "string" },
+              environmentFingerprint: { type: "string" },
+              result: { type: "string", enum: ["blocked", "failed", "passed"] },
+              summary: { type: "string" },
+              reusableFailureSignature: { anyOf: [{ type: "null" }, { type: "string" }] },
+            },
+          },
+        },
         approval: approvalSchema(),
         blocker: blockerSchema(),
         reviewCycle: {
@@ -290,6 +334,7 @@ function assertCheckpoint(value: unknown): asserts value is ControlCheckpoint {
     "agents",
     "approval",
     "blocker",
+    "evidenceRecords",
     "kind",
     "nextAction",
     "outcomes",
@@ -300,6 +345,7 @@ function assertCheckpoint(value: unknown): asserts value is ControlCheckpoint {
   assertString(value.summary, "summary");
   assertAgents(value.agents);
   assertStringArray(value.outcomes, "outcomes");
+  assertEvidenceRecords(value.evidenceRecords);
   assertApproval(value.approval);
   assertBlocker(value.blocker);
   assertReviewCycle(value.reviewCycle);
@@ -358,6 +404,51 @@ function assertAgents(value: unknown): asserts value is ControlEnvelope["agents"
     assertString(subagent.role, `agents.subagents[${index}].role`);
     assertOneOf(subagent.status, ["running", "waiting", "blocked"]);
     assertString(subagent.task, `agents.subagents[${index}].task`);
+  }
+}
+
+function assertEvidenceRecords(
+  value: unknown,
+): asserts value is ControlCheckpoint["evidenceRecords"] {
+  if (!Array.isArray(value)) {
+    throw new Error("evidenceRecords must be an array");
+  }
+
+  for (const [index, record] of value.entries()) {
+    if (!isRecord(record)) {
+      throw new Error(`evidenceRecords[${index}] must be an object`);
+    }
+    assertExactKeys(record, [
+      "environmentFingerprint",
+      "gateName",
+      "gateVersion",
+      "headSha",
+      "kind",
+      "relevantInputDigest",
+      "result",
+      "reusableFailureSignature",
+      "stablePatchId",
+      "summary",
+    ]);
+    assertOneOf(record.kind, ["blocker", "gate"]);
+    assertString(record.gateName, `evidenceRecords[${index}].gateName`);
+    assertString(record.gateVersion, `evidenceRecords[${index}].gateVersion`);
+    if (record.headSha !== null) {
+      assertString(record.headSha, `evidenceRecords[${index}].headSha`);
+    }
+    if (record.stablePatchId !== null) {
+      assertString(record.stablePatchId, `evidenceRecords[${index}].stablePatchId`);
+    }
+    assertString(record.relevantInputDigest, `evidenceRecords[${index}].relevantInputDigest`);
+    assertString(record.environmentFingerprint, `evidenceRecords[${index}].environmentFingerprint`);
+    assertOneOf(record.result, ["blocked", "failed", "passed"]);
+    assertString(record.summary, `evidenceRecords[${index}].summary`);
+    if (record.reusableFailureSignature !== null) {
+      assertString(
+        record.reusableFailureSignature,
+        `evidenceRecords[${index}].reusableFailureSignature`,
+      );
+    }
   }
 }
 

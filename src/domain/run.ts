@@ -101,6 +101,28 @@ export interface OutcomeRecord {
   observedAt: string;
 }
 
+export type EvidenceRecordKind = "blocker" | "gate";
+export type EvidenceRecordResult = "blocked" | "failed" | "passed";
+
+export interface EvidenceCacheRecord {
+  runId: RunId;
+  repoKey: string;
+  cacheKey: string;
+  kind: EvidenceRecordKind;
+  gateName: string;
+  gateVersion: string;
+  headSha: string | null;
+  stablePatchId: string | null;
+  relevantInputDigest: string;
+  environmentFingerprint: string;
+  result: EvidenceRecordResult;
+  summary: string;
+  reusableFailureSignature: string | null;
+  payload: unknown;
+  createdAt: string;
+  lastUsedAt: string;
+}
+
 export interface EventRecord {
   runId: RunId;
   sequence: number;

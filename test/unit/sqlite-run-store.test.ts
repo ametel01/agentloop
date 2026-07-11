@@ -31,7 +31,7 @@ describe("SQLite run store", () => {
     expect(version?.version).toBe(CURRENT_SCHEMA_VERSION);
   });
 
-  test("migrations add usage completeness, checkpoints, and outcomes", async () => {
+  test("migrations add usage completeness, checkpoints, outcomes, and evidence cache", async () => {
     const database = await openDatabase({ path: await tempDatabasePath() });
 
     const turnColumns = database
@@ -48,11 +48,17 @@ describe("SQLite run store", () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'outcomes'",
       )
       .get();
+    const evidenceCacheTable = database
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'evidence_cache'",
+      )
+      .get();
 
     expect(turnColumns).toContain("abort_reason");
     expect(turnColumns).toContain("usage_complete");
     expect(checkpointTable?.name).toBe("checkpoints");
     expect(outcomeTable?.name).toBe("outcomes");
+    expect(evidenceCacheTable?.name).toBe("evidence_cache");
     database.close();
   });
 
@@ -217,6 +223,54 @@ describe("SQLite run store", () => {
     expect(second).toHaveLength(0);
     expect(store.listOutcomes("run-1")).toHaveLength(1);
     expect(store.getRun("run-1")?.lastUsefulOutcomeAt).toBe("2026-07-10T00:00:01.000Z");
+    database.close();
+  });
+
+  test("persists exact evidence cache records and prunes oldest entries", async () => {
+    const database = await openDatabase({ path: await tempDatabasePath() });
+    const store = new SqliteRunStore(database);
+    store.createRun(createRunInput({ id: "run-1" }));
+
+    const first = store.upsertEvidenceCache({
+      cacheKey: "key-1",
+      environmentFingerprint: "env-1",
+      gateName: "bun run verify",
+      gateVersion: "v1",
+      headSha: "abc123",
+      kind: "gate",
+      now: "2026-07-10T00:00:01.000Z",
+      payloadJson: JSON.stringify({ key: "key-1" }),
+      relevantInputDigest: "inputs-1",
+      repoKey: "repo-key",
+      reusableFailureSignature: null,
+      result: "passed",
+      runId: "run-1",
+      stablePatchId: null,
+      summary: "verify passed",
+    });
+    store.upsertEvidenceCache({
+      ...first,
+      cacheKey: "key-2",
+      now: "2026-07-10T00:00:02.000Z",
+      payloadJson: JSON.stringify({ key: "key-2" }),
+      summary: "second",
+    });
+
+    const hit = store.lookupEvidenceCache({
+      cacheKey: "key-1",
+      now: "2026-07-10T00:00:03.000Z",
+      repoKey: "repo-key",
+    });
+    expect(hit?.lastUsedAt).toBe("2026-07-10T00:00:03.000Z");
+    expect(hit?.summary).toBe("verify passed");
+    expect(
+      store.lookupEvidenceCache({ cacheKey: "missing", now: "now", repoKey: "repo-key" }),
+    ).toBe(null);
+
+    expect(store.pruneEvidenceCache({ maxEntries: 1, repoKey: "repo-key" })).toBe(1);
+    expect(store.listEvidenceCache("repo-key", 10).map((record) => record.cacheKey)).toEqual([
+      "key-1",
+    ]);
     database.close();
   });
 

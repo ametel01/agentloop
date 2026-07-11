@@ -9,6 +9,7 @@ import {
   type TrancheAbortReason,
 } from "./application/bounded-turn-supervisor.ts";
 import { runDoctor, type DoctorDependencies } from "./application/doctor.ts";
+import { evidencePromptBlock, normalizeEvidenceRecord } from "./application/evidence-cache.ts";
 import { buildDispatchObjective, discoverReadyIssues } from "./application/dispatch.ts";
 import { inspectHotState, normalizeOwnedStatusShard } from "./application/hot-state.ts";
 import { resolveStateDir } from "./application/paths.ts";
@@ -33,6 +34,7 @@ import {
   DEFAULT_RUN_LIMITS,
   type ApprovalRequest,
   type CheckpointRecord,
+  type EvidenceCacheRecord,
   type EventRecord,
   type LeaseRecord,
   type OutcomeRecord,
@@ -673,7 +675,17 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
     fileSystem: dependencies.fileSystem,
     repoPath: run.repoPath,
   });
-  const prompt = buildPrompt(turnKind, run, input.message, input.approvalId, hotState.instruction);
+  const evidenceInstruction = evidencePromptBlock(store.listEvidenceCache(run.repoKey, 5));
+  const runtimeInstruction = [hotState.instruction, evidenceInstruction]
+    .filter(isPresent)
+    .join("\n\n");
+  const prompt = buildPrompt(
+    turnKind,
+    run,
+    input.message,
+    input.approvalId,
+    runtimeInstruction === "" ? null : runtimeInstruction,
+  );
   store.createTurn({
     fingerprintBefore: null,
     id: turnId,
@@ -726,6 +738,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
             persistCheckpointMessage({
               clock,
               messageText,
+              repoKey: run.repoKey,
               runId: run.id,
               store,
               turnId,
@@ -1176,6 +1189,7 @@ interface ReviewCycleStop {
 function persistCheckpointMessage(input: {
   clock: Clock;
   messageText: string;
+  repoKey: string;
   runId: string;
   store: SqliteRunStore;
   turnId: string;
@@ -1193,11 +1207,13 @@ function persistCheckpointMessage(input: {
 
   const reviewCycle = message.reviewCycle;
   const ownedStatusShard = normalizeOwnedStatusShard(message.ownedStatusShard);
+  const evidenceRecords = message.evidenceRecords.map(normalizeEvidenceRecord).filter(isPresent);
 
   input.store.createCheckpoint({
     abortReason: null,
     createdAt: input.clock.now().toISOString(),
     payloadJson: redactJson({
+      evidenceRecords,
       nextAction: message.nextAction,
       outcomes: message.outcomes,
       ownedStatusShard,
@@ -1209,6 +1225,28 @@ function persistCheckpointMessage(input: {
     turnId: input.turnId,
     usageComplete: false,
   });
+
+  const now = input.clock.now().toISOString();
+  for (const evidence of evidenceRecords) {
+    input.store.upsertEvidenceCache({
+      cacheKey: evidence.cacheKey,
+      environmentFingerprint: evidence.environmentFingerprint,
+      gateName: evidence.gateName,
+      gateVersion: evidence.gateVersion,
+      headSha: evidence.headSha,
+      kind: evidence.kind,
+      now,
+      payloadJson: redactJson(evidence.payload),
+      relevantInputDigest: evidence.relevantInputDigest,
+      repoKey: input.repoKey,
+      reusableFailureSignature: evidence.reusableFailureSignature,
+      result: evidence.result,
+      runId: input.runId,
+      stablePatchId: evidence.stablePatchId,
+      summary: evidence.summary,
+    });
+  }
+  input.store.pruneEvidenceCache({ maxEntries: 100, repoKey: input.repoKey });
 
   if (reviewCycle === null || reviewCycle.currentCycle < reviewCycle.maxCycles) {
     return null;
@@ -1819,6 +1857,7 @@ interface RunStatusDocument extends RunRecord {
   pendingApprovals: ApprovalRequest[];
   turns: TurnRecord[];
   checkpoints: CheckpointRecord[];
+  evidenceCache: EvidenceCacheRecord[];
   outcomes: OutcomeRecord[];
   lease: LeaseRecord | null;
   heartbeatAgeMs: number | null;
@@ -1833,6 +1872,7 @@ function buildRunStatus(store: SqliteRunStore, run: RunRecord, clock: Clock): Ru
     heartbeatAgeMs:
       lease === null ? null : Math.max(0, clock.now().getTime() - Date.parse(lease.heartbeatAt)),
     checkpoints: store.listCheckpoints(run.id),
+    evidenceCache: store.listEvidenceCache(run.repoKey, 10),
     latestBlocker: latestBlocker(store.listTurns(run.id)),
     latestCheckpoint: store.getLatestCheckpoint(run.id),
     lease,
@@ -1857,6 +1897,7 @@ function renderRunStatus(status: RunStatusDocument): string {
     `stateFingerprint: ${status.stateFingerprint ?? "none"}`,
     `lastUsefulOutcomeAt: ${status.lastUsefulOutcomeAt ?? "none"}`,
     `outcomeCount: ${status.outcomes.length}`,
+    `evidenceCacheCount: ${status.evidenceCache.length}`,
     `noProgressCount: ${status.noProgressCount}`,
     `consecutiveFailures: ${status.consecutiveFailures}`,
     `lastError: ${status.lastError ?? "none"}`,
@@ -1883,6 +1924,12 @@ function renderRunStatus(status: RunStatusDocument): string {
       `turn.abortReason: ${turn.abortReason ?? "none"}`,
       `turn.usageComplete: ${turn.usageComplete}`,
       `turn.usage: input=${turn.usage.inputTokens} cached=${turn.usage.cachedInputTokens} output=${turn.usage.outputTokens} reasoning=${turn.usage.reasoningTokens}`,
+    );
+  }
+
+  for (const evidence of status.evidenceCache.slice(0, 5)) {
+    lines.push(
+      `evidenceCache: ${evidence.kind}:${evidence.gateName}@${evidence.gateVersion} ${evidence.result} key=${evidence.cacheKey} head=${evidence.headSha ?? "none"} patch=${evidence.stablePatchId ?? "none"} input=${evidence.relevantInputDigest} env=${evidence.environmentFingerprint}`,
     );
   }
 

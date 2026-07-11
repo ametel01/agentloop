@@ -183,6 +183,20 @@ describe("Codex contracts", () => {
         agents: noActiveAgents(),
         approval: null,
         blocker: null,
+        evidenceRecords: [
+          {
+            environmentFingerprint: "macos-bun-1.3.14",
+            gateName: "bun run verify",
+            gateVersion: "package-json-scripts:v1",
+            headSha: "abc123",
+            kind: "gate",
+            relevantInputDigest: "src-lock-abc",
+            result: "passed",
+            reusableFailureSignature: null,
+            stablePatchId: null,
+            summary: "verify passed",
+          },
+        ],
         kind: "checkpoint",
         nextAction: "Continue validating PR 123.",
         outcomes: ["pr:123:checks_green"],
@@ -200,6 +214,7 @@ describe("Codex contracts", () => {
     if (message.kind === "checkpoint") {
       expect(message.outcomes).toEqual(["pr:123:checks_green"]);
       expect(message.ownedStatusShard).toBe("STATUS.d/pr-123.md");
+      expect(message.evidenceRecords[0]?.gateName).toBe("bun run verify");
     }
   });
 

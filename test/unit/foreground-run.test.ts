@@ -263,6 +263,38 @@ describe("foreground run", () => {
     expect(run.turns[0]?.usageComplete).toBe(true);
   });
 
+  test("includes exact cached evidence references in continuation prompts", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner([evidenceCheckpointContinueEvents(), completeEvents()]);
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "reuse evidence", "--trust-repo"],
+      createDependencies(codexRunner, "v1", true),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(2);
+    expect(codexRunner.inputs[1]?.prompt).toContain("Exact reusable evidence");
+    expect(codexRunner.inputs[1]?.prompt).toContain("bun run verify@package-json:v1");
+    expect(codexRunner.inputs[1]?.prompt).toContain(
+      "Treat every absent or changed key as a cache miss",
+    );
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      evidenceCache: Array<{ gateName: string; summary: string }>;
+    };
+    expect(run.evidenceCache[0]?.gateName).toBe("bun run verify");
+    expect(run.evidenceCache[0]?.summary).toBe("verify passed");
+  });
+
   test("injects hot-state compaction instruction before assignment when STATUS.md is oversized", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
     tempDirs.push(stateDir);
@@ -1575,6 +1607,7 @@ function checkpointThenFinalEvents(): ThreadEvent[] {
           agents: noActiveAgents(),
           approval: null,
           blocker: null,
+          evidenceRecords: [],
           kind: "checkpoint",
           nextAction: "Finish final validation.",
           outcomes: ["git-head:abc123"],
@@ -1601,6 +1634,7 @@ function reviewCycleCapEvents(): ThreadEvent[] {
           agents: noActiveAgents(),
           approval: null,
           blocker: null,
+          evidenceRecords: [],
           kind: "checkpoint",
           nextAction: "Stop before review cycle 3.",
           outcomes: [],
@@ -1611,6 +1645,46 @@ function reviewCycleCapEvents(): ThreadEvent[] {
             prUrl: "https://github.com/example/repo/pull/123",
           },
           summary: "Review cap reached.",
+        }),
+        type: "agent_message",
+      },
+      type: "item.completed",
+    },
+    ...completeEnvelopeEvents({ includeThreadStarted: false, status: "continue" }).slice(1),
+  ];
+}
+
+function evidenceCheckpointContinueEvents(): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      item: {
+        id: "checkpoint-evidence",
+        text: JSON.stringify({
+          agents: noActiveAgents(),
+          approval: null,
+          blocker: null,
+          evidenceRecords: [
+            {
+              environmentFingerprint: "macos-bun-1.3.14",
+              gateName: "bun run verify",
+              gateVersion: "package-json:v1",
+              headSha: "abc123",
+              kind: "gate",
+              relevantInputDigest: "src-lock-abc",
+              result: "passed",
+              reusableFailureSignature: null,
+              stablePatchId: null,
+              summary: "verify passed",
+            },
+          ],
+          kind: "checkpoint",
+          nextAction: "Continue from cached evidence.",
+          outcomes: [],
+          ownedStatusShard: null,
+          reviewCycle: null,
+          summary: "Recorded exact-head gate evidence.",
         }),
         type: "agent_message",
       },

@@ -5,6 +5,9 @@ import type {
   ApprovalRequest,
   CheckpointRecord,
   CreateRunInput,
+  EvidenceCacheRecord,
+  EvidenceRecordKind,
+  EvidenceRecordResult,
   EventRecord,
   LeaseRecord,
   OutcomeRecord,
@@ -77,6 +80,10 @@ export interface RunStore {
   updateUsage(input: UpdateUsageInput): RunRecord;
   recordOutcomes(input: RecordOutcomesInput): OutcomeRecord[];
   listOutcomes(runId: string): OutcomeRecord[];
+  upsertEvidenceCache(input: UpsertEvidenceCacheInput): EvidenceCacheRecord;
+  lookupEvidenceCache(input: LookupEvidenceCacheInput): EvidenceCacheRecord | null;
+  listEvidenceCache(repoKey: string, limit: number): EvidenceCacheRecord[];
+  pruneEvidenceCache(input: PruneEvidenceCacheInput): number;
   createTurn(input: CreateTurnInput): TurnRecord;
   completeTurn(input: CompleteTurnInput): TurnRecord;
   createCheckpoint(input: CreateCheckpointInput): CheckpointRecord;
@@ -129,6 +136,35 @@ export interface RecordOutcomesInput {
     payloadJson: string;
   }>;
   observedAt: string;
+}
+
+export interface UpsertEvidenceCacheInput {
+  runId: string;
+  repoKey: string;
+  cacheKey: string;
+  kind: EvidenceRecordKind;
+  gateName: string;
+  gateVersion: string;
+  headSha: string | null;
+  stablePatchId: string | null;
+  relevantInputDigest: string;
+  environmentFingerprint: string;
+  result: EvidenceRecordResult;
+  summary: string;
+  reusableFailureSignature: string | null;
+  payloadJson: string;
+  now: string;
+}
+
+export interface LookupEvidenceCacheInput {
+  repoKey: string;
+  cacheKey: string;
+  now: string;
+}
+
+export interface PruneEvidenceCacheInput {
+  repoKey: string;
+  maxEntries: number;
 }
 
 export interface CreateTurnInput {
@@ -566,6 +602,127 @@ export class SqliteRunStore implements RunStore {
       )
       .all(runId)
       .map(mapOutcome);
+  }
+
+  upsertEvidenceCache(input: UpsertEvidenceCacheInput): EvidenceCacheRecord {
+    this.database
+      .query(
+        `
+        INSERT INTO evidence_cache(
+          repo_key,
+          cache_key,
+          run_id,
+          kind,
+          gate_name,
+          gate_version,
+          head_sha,
+          stable_patch_id,
+          relevant_input_digest,
+          environment_fingerprint,
+          result,
+          summary,
+          reusable_failure_signature,
+          payload_json,
+          created_at,
+          last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(repo_key, cache_key) DO UPDATE SET
+          run_id = excluded.run_id,
+          kind = excluded.kind,
+          gate_name = excluded.gate_name,
+          gate_version = excluded.gate_version,
+          head_sha = excluded.head_sha,
+          stable_patch_id = excluded.stable_patch_id,
+          relevant_input_digest = excluded.relevant_input_digest,
+          environment_fingerprint = excluded.environment_fingerprint,
+          result = excluded.result,
+          summary = excluded.summary,
+          reusable_failure_signature = excluded.reusable_failure_signature,
+          payload_json = excluded.payload_json,
+          last_used_at = excluded.last_used_at
+      `,
+      )
+      .run(
+        input.repoKey,
+        input.cacheKey,
+        input.runId,
+        input.kind,
+        input.gateName,
+        input.gateVersion,
+        input.headSha,
+        input.stablePatchId,
+        input.relevantInputDigest,
+        input.environmentFingerprint,
+        input.result,
+        input.summary,
+        input.reusableFailureSignature,
+        input.payloadJson,
+        input.now,
+        input.now,
+      );
+
+    const record = this.lookupEvidenceCache({
+      cacheKey: input.cacheKey,
+      now: input.now,
+      repoKey: input.repoKey,
+    });
+    if (record === null) {
+      throw new StateConflictError(`Evidence cache record ${input.cacheKey} was not persisted`);
+    }
+    return record;
+  }
+
+  lookupEvidenceCache(input: LookupEvidenceCacheInput): EvidenceCacheRecord | null {
+    const row = this.database
+      .query<EvidenceCacheRow, [string, string]>(
+        `
+        SELECT * FROM evidence_cache
+        WHERE repo_key = ? AND cache_key = ?
+      `,
+      )
+      .get(input.repoKey, input.cacheKey);
+    if (row === null) {
+      return null;
+    }
+
+    this.database
+      .query("UPDATE evidence_cache SET last_used_at = ? WHERE repo_key = ? AND cache_key = ?")
+      .run(input.now, input.repoKey, input.cacheKey);
+
+    return { ...mapEvidenceCache(row), lastUsedAt: input.now };
+  }
+
+  listEvidenceCache(repoKey: string, limit: number): EvidenceCacheRecord[] {
+    return this.database
+      .query<EvidenceCacheRow, [string, number]>(
+        `
+        SELECT * FROM evidence_cache
+        WHERE repo_key = ?
+        ORDER BY last_used_at DESC, created_at DESC, cache_key ASC
+        LIMIT ?
+      `,
+      )
+      .all(repoKey, limit)
+      .map(mapEvidenceCache);
+  }
+
+  pruneEvidenceCache(input: PruneEvidenceCacheInput): number {
+    const result = this.database
+      .query(
+        `
+        DELETE FROM evidence_cache
+        WHERE repo_key = ?
+          AND cache_key NOT IN (
+            SELECT cache_key
+            FROM evidence_cache
+            WHERE repo_key = ?
+            ORDER BY last_used_at DESC, created_at DESC, cache_key ASC
+            LIMIT ?
+          )
+      `,
+      )
+      .run(input.repoKey, input.repoKey, input.maxEntries);
+    return result.changes;
   }
 
   createTurn(input: CreateTurnInput): TurnRecord {
@@ -1051,6 +1208,25 @@ interface OutcomeRow {
   observed_at: string;
 }
 
+interface EvidenceCacheRow {
+  repo_key: string;
+  cache_key: string;
+  run_id: string;
+  kind: EvidenceRecordKind;
+  gate_name: string;
+  gate_version: string;
+  head_sha: string | null;
+  stable_patch_id: string | null;
+  relevant_input_digest: string;
+  environment_fingerprint: string;
+  result: EvidenceRecordResult;
+  summary: string;
+  reusable_failure_signature: string | null;
+  payload_json: string;
+  created_at: string;
+  last_used_at: string;
+}
+
 interface EventRow {
   run_id: string;
   sequence: number;
@@ -1149,6 +1325,27 @@ function mapOutcome(row: OutcomeRow): OutcomeRecord {
     payload: JSON.parse(row.payload_json),
     runId: row.run_id,
     type: row.type,
+  };
+}
+
+function mapEvidenceCache(row: EvidenceCacheRow): EvidenceCacheRecord {
+  return {
+    cacheKey: row.cache_key,
+    createdAt: row.created_at,
+    environmentFingerprint: row.environment_fingerprint,
+    gateName: row.gate_name,
+    gateVersion: row.gate_version,
+    headSha: row.head_sha,
+    kind: row.kind,
+    lastUsedAt: row.last_used_at,
+    payload: JSON.parse(row.payload_json),
+    relevantInputDigest: row.relevant_input_digest,
+    repoKey: row.repo_key,
+    reusableFailureSignature: row.reusable_failure_signature,
+    result: row.result,
+    runId: row.run_id,
+    stablePatchId: row.stable_patch_id,
+    summary: row.summary,
   };
 }
 

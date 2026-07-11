@@ -20,7 +20,7 @@
 - [x] Step 4: Replace activity fingerprints with `OutcomeProgress`.
 - [x] Step 5: Split compact checkpoints from final control messages.
 - [x] Step 6: Bound hot context and enforce closure-first review policy.
-- [ ] Step 7: Add strict exact-head evidence reuse.
+- [x] Step 7: Add strict exact-head evidence reuse.
 - [ ] Step 8: Expose outcome efficiency, document operations, and run final gates.
 
 ## Baseline
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 6 complete and validated in both Agentloop and installed skills.
-- Next step: Step 7 strict exact-head evidence reuse.
+- Status: Step 7 complete and validated.
+- Next step: Step 8 outcome efficiency, documentation, and final gates.
 
 ## Update Rules
 
@@ -72,6 +72,10 @@
 - 2026-07-11: Step 6 validation passed: targeted `bun run typecheck` and `bun test test/unit/foreground-run.test.ts --timeout 10000`, full `bun run format && bun run verify`, `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json /Users/alexmetelli/.agents/skills/team-coordinator/evals/evals.json /Users/alexmetelli/.agents/skills/agent-team-status-protocol/evals/evals.json`, and `git -C /Users/alexmetelli/.agents/skills diff --check`. Test summary: 89 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 6 Agentloop commit subject: `feat: bound hot coordination context and review cycles`.
 - 2026-07-11: Step 6 installed-skills commit: `ea2bc42` (`feat: prioritize closure in bounded agent loops`).
+- 2026-07-11: Step 7 added `EvidenceCache` key normalization, SQLite schema version 4 cache persistence/pruning, checkpoint `evidenceRecords`, prompt references for exact cache hits, and status JSON/text visibility for recent cache entries.
+- 2026-07-11: Step 7 tests covered exact key hits, independent invalidation by gate version, relevant input digest, environment fingerprint, and head SHA, stable-patch fallback when head SHA is absent, missing-ref cache misses, secret redaction in summaries/signatures, SQLite lookup/pruning, strict checkpoint schema parsing, and continuation-prompt reuse guidance.
+- 2026-07-11: Step 7 validation passed: targeted `bun run typecheck` and `bun test test/unit/evidence-cache.test.ts test/unit/sqlite-run-store.test.ts test/unit/codex-contracts.test.ts test/unit/foreground-run.test.ts --timeout 10000`, then full `bun run format && bun run verify`. Test summary: 94 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 7 Agentloop commit subject: `feat: reuse strictly equivalent execution evidence`.
 
 ---
 

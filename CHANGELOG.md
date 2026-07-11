@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add strict exact-head/stable-patch evidence reuse for gate and blocker checkpoints with local cache persistence and prompt references.
 - Add hot `STATUS.md` size inspection, compaction/sharding prompt instructions, and typed review-cycle-cap stops.
 - Add durable tranche checkpoints with explicit turn abort reasons and usage-completeness markers.
 - Add bounded Codex tranche supervision with cooperative timeout, hard-deadline, and event-stall classification.
