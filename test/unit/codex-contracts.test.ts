@@ -198,6 +198,7 @@ function createRunRecord(): RunRecord {
     finishedAt: null,
     id: "run-123",
     lastError: null,
+    lastUsefulOutcomeAt: null,
     limits: DEFAULT_RUN_LIMITS,
     model: null,
     noProgressCount: 0,

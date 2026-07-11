@@ -552,7 +552,7 @@ describe("foreground run", () => {
     expect(run.usage.cachedInputTokens).toBe(999);
   });
 
-  test("marks a run stuck after repeated unchanged available fingerprints", async () => {
+  test("marks a run stuck after repeated turns with no new material outcomes", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
     tempDirs.push(stateDir);
     process.env.AGENTLOOP_STATE_DIR = stateDir;
@@ -577,7 +577,7 @@ describe("foreground run", () => {
     expect(run.noProgressCount).toBe(2);
   });
 
-  test("does not increment no-progress count when GitHub fingerprint collection fails", async () => {
+  test("does not increment no-progress count when outcome sources are unavailable", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
     tempDirs.push(stateDir);
     process.env.AGENTLOOP_STATE_DIR = stateDir;
@@ -1245,7 +1245,7 @@ describe("foreground run", () => {
 function createDependencies<TCodexRunner extends CodexRunner>(
   codexRunner: TCodexRunner,
   skillVersion = "v1",
-  fingerprintAvailable = false,
+  outcomeSourcesAvailable = false,
 ) {
   const homeDir = "/home/alex";
   const repoPath = "/work/agentloop";
@@ -1275,8 +1275,12 @@ function createDependencies<TCodexRunner extends CodexRunner>(
     clock: new FixedClock(),
     codexRunner,
     commandRunner: new FakeCommandRunner((command, args) => {
-      if (command === "git" && args.includes("rev-parse")) {
+      if (command === "git" && args.includes("rev-parse") && args.includes("--show-toplevel")) {
         return { exitCode: 0, stdout: `${repoPath}\n`, stderr: "" };
+      }
+
+      if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
+        return { exitCode: 0, stdout: "abc123\n", stderr: "" };
       }
 
       if (command === "git" && args[0] === "status") {
@@ -1300,7 +1304,7 @@ function createDependencies<TCodexRunner extends CodexRunner>(
       }
 
       if (command === "gh" && (args[0] === "issue" || args[0] === "pr")) {
-        return fingerprintAvailable
+        return outcomeSourcesAvailable
           ? { exitCode: 0, stdout: "[]\n", stderr: "" }
           : { exitCode: 1, stdout: "", stderr: "GitHub unavailable" };
       }

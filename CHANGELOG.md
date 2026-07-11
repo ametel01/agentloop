@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Track material Git/GitHub outcomes instead of activity fingerprints for no-progress decisions.
 - Enforce consecutive turn-failure limits before starting another Codex turn.
 - Keep interactive foreground sessions attached across paused open-run states and stream a compact structured roster with active/running/waiting/blocked counts, each agent's role and current task, coordinator decisions, and failures while hiding routine command/file/wait noise.
 - Add GitHub-visible label claim guidance for dispatched issues, including same-run recovery, different-run refusal, existing-PR reuse, and terminal blocker evidence.

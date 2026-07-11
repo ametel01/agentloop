@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export function migrate(database: Database): void {
   applyPragmas(database);
@@ -33,6 +33,13 @@ export function migrate(database: Database): void {
         .run(2, new Date().toISOString());
     }
 
+    if (version < 3) {
+      applyMigration3(database);
+      database
+        .query("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+        .run(3, new Date().toISOString());
+    }
+
     database.run("COMMIT");
   } catch (error) {
     database.run("ROLLBACK");
@@ -57,6 +64,21 @@ function applyMigration2(database: Database): void {
     )
   `);
   database.run("CREATE INDEX checkpoints_turn_idx ON checkpoints(turn_id)");
+}
+
+function applyMigration3(database: Database): void {
+  database.run("ALTER TABLE runs ADD COLUMN last_useful_outcome_at TEXT NULL");
+  database.run(`
+    CREATE TABLE outcomes(
+      run_id TEXT NOT NULL REFERENCES runs(id),
+      key TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      PRIMARY KEY(run_id, key)
+    )
+  `);
+  database.run("CREATE INDEX outcomes_type_idx ON outcomes(run_id, type)");
 }
 
 export function applyPragmas(database: Database): void {

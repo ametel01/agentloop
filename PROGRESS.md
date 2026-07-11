@@ -17,7 +17,7 @@
 - [x] Step 1: Characterize current turn, cancellation, and persistence semantics.
 - [x] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
 - [x] Step 3: Persist typed checkpoints and complete usage state.
-- [ ] Step 4: Replace activity fingerprints with `OutcomeProgress`.
+- [x] Step 4: Replace activity fingerprints with `OutcomeProgress`.
 - [ ] Step 5: Split compact checkpoints from final control messages.
 - [ ] Step 6: Bound hot context and enforce closure-first review policy.
 - [ ] Step 7: Add strict exact-head evidence reuse.
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 3 complete and validated.
-- Next step: Step 4 outcome-based progress tracking after the Step 3 commit.
+- Status: Step 4 complete and validated.
+- Next step: Step 5 checkpoint/final control-message split after the Step 4 commit.
 
 ## Update Rules
 
@@ -59,6 +59,10 @@
 - 2026-07-11: Step 3 tests covered migration shape, checkpoint persistence, incomplete official usage, SDK-failure abort reasons, supervised abort checkpoints, and status rendering for latest checkpoint and turn usage completeness.
 - 2026-07-11: Step 3 validation passed: targeted `bun run typecheck && bun test test/unit/foreground-run.test.ts test/unit/sqlite-run-store.test.ts --timeout 10000` and final `bun run verify`. Test summary: 82 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 3 Agentloop commit subject: `feat: persist supervised tranche checkpoints`.
+- 2026-07-11: Step 4 replaced activity fingerprints with `collectOutcomeProgress`, persisted unique material outcome keys, added `last_useful_outcome_at`, removed `src/infrastructure/fingerprint.ts`, and exposed outcome counts in status output.
+- 2026-07-11: Step 4 tests covered stable Git/GitHub outcome keys, ignored activity/timestamp fields, fail-closed unavailable sources, idempotent outcome storage, and unchanged-outcome no-progress behavior.
+- 2026-07-11: Step 4 validation passed: targeted `bun run format && bun run typecheck && bun test test/unit/outcome-progress.test.ts test/unit/sqlite-run-store.test.ts test/unit/foreground-run.test.ts --timeout 10000`, then `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 85 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 4 Agentloop commit subject: `feat: track material outcomes instead of activity`.
 
 ---
 

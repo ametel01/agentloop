@@ -92,6 +92,14 @@ export interface CheckpointRecord {
   createdAt: string;
 }
 
+export interface OutcomeRecord {
+  runId: RunId;
+  key: string;
+  type: string;
+  payload: unknown;
+  observedAt: string;
+}
+
 export interface EventRecord {
   runId: RunId;
   sequence: number;
@@ -130,6 +138,7 @@ export interface RunRecord {
   noProgressCount: number;
   consecutiveFailures: number;
   stateFingerprint: string | null;
+  lastUsefulOutcomeAt: string | null;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;

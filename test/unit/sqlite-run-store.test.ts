@@ -31,7 +31,7 @@ describe("SQLite run store", () => {
     expect(version?.version).toBe(CURRENT_SCHEMA_VERSION);
   });
 
-  test("migration version 2 adds turn usage completeness and checkpoints", async () => {
+  test("migrations add usage completeness, checkpoints, and outcomes", async () => {
     const database = await openDatabase({ path: await tempDatabasePath() });
 
     const turnColumns = database
@@ -43,10 +43,16 @@ describe("SQLite run store", () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'",
       )
       .get();
+    const outcomeTable = database
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'outcomes'",
+      )
+      .get();
 
     expect(turnColumns).toContain("abort_reason");
     expect(turnColumns).toContain("usage_complete");
     expect(checkpointTable?.name).toBe("checkpoints");
+    expect(outcomeTable?.name).toBe("outcomes");
     database.close();
   });
 
@@ -176,6 +182,41 @@ describe("SQLite run store", () => {
     expect(store.listTurns("run-1")[0]?.abortReason).toBe("event_stalled");
     expect(store.getLatestCheckpoint("run-1")?.abortReason).toBe("event_stalled");
     expect(store.listCheckpoints("run-1")).toHaveLength(1);
+    database.close();
+  });
+
+  test("records unique outcomes and last useful outcome time idempotently", async () => {
+    const database = await openDatabase({ path: await tempDatabasePath() });
+    const store = new SqliteRunStore(database);
+    store.createRun(createRunInput({ id: "run-1" }));
+
+    const first = store.recordOutcomes({
+      observedAt: "2026-07-10T00:00:01.000Z",
+      outcomes: [
+        {
+          key: "git-head:abc123",
+          payloadJson: JSON.stringify({ sha: "abc123" }),
+          type: "git_head",
+        },
+      ],
+      runId: "run-1",
+    });
+    const second = store.recordOutcomes({
+      observedAt: "2026-07-10T00:00:02.000Z",
+      outcomes: [
+        {
+          key: "git-head:abc123",
+          payloadJson: JSON.stringify({ sha: "abc123" }),
+          type: "git_head",
+        },
+      ],
+      runId: "run-1",
+    });
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(0);
+    expect(store.listOutcomes("run-1")).toHaveLength(1);
+    expect(store.getRun("run-1")?.lastUsefulOutcomeAt).toBe("2026-07-10T00:00:01.000Z");
     database.close();
   });
 

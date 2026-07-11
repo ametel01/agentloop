@@ -30,6 +30,7 @@ import {
   type CheckpointRecord,
   type EventRecord,
   type LeaseRecord,
+  type OutcomeRecord,
   type RunLimits,
   type RunRecord,
   type RunUsage,
@@ -37,7 +38,7 @@ import {
 } from "./domain/run.ts";
 import { ProductionCommandRunner } from "./infrastructure/command-runner.ts";
 import { NodeFileSystem } from "./infrastructure/filesystem.ts";
-import { collectProgressFingerprint } from "./infrastructure/fingerprint.ts";
+import { collectOutcomeProgress } from "./infrastructure/outcome-progress.ts";
 import { SystemClock } from "./infrastructure/clock.ts";
 import { RandomIdGenerator } from "./infrastructure/ids.ts";
 import { SystemScheduler } from "./infrastructure/scheduler.ts";
@@ -850,18 +851,30 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       });
     }
 
-    const fingerprint = await collectProgressFingerprint(updatedRun, dependencies);
-    const unchanged =
-      envelope.status === "continue" &&
-      fingerprint.allSourcesAvailable &&
-      updatedRun.stateFingerprint === fingerprint.hash;
-    const noProgressCount = unchanged ? updatedRun.noProgressCount + 1 : 0;
+    const outcomeObservation = await collectOutcomeProgress(updatedRun, dependencies);
+    const insertedOutcomes = outcomeObservation.allSourcesAvailable
+      ? store.recordOutcomes({
+          observedAt: clock.now().toISOString(),
+          outcomes: outcomeObservation.outcomes.map((outcome) => ({
+            key: outcome.key,
+            payloadJson: redactJson(outcome.payload),
+            type: outcome.type,
+          })),
+          runId: updatedRun.id,
+        })
+      : [];
+    const noProgressCount =
+      envelope.status === "continue" && outcomeObservation.allSourcesAvailable
+        ? insertedOutcomes.length === 0
+          ? updatedRun.noProgressCount + 1
+          : 0
+        : updatedRun.noProgressCount;
     const withProgress = store.updateProgress({
       consecutiveFailures: 0,
       id: updatedRun.id,
       noProgressCount,
       now: clock.now().toISOString(),
-      stateFingerprint: fingerprint.hash,
+      stateFingerprint: outcomeObservation.diagnosticHash,
     });
 
     if (
@@ -1682,6 +1695,7 @@ interface RunStatusDocument extends RunRecord {
   pendingApprovals: ApprovalRequest[];
   turns: TurnRecord[];
   checkpoints: CheckpointRecord[];
+  outcomes: OutcomeRecord[];
   lease: LeaseRecord | null;
   heartbeatAgeMs: number | null;
   latestBlocker: unknown;
@@ -1698,6 +1712,7 @@ function buildRunStatus(store: SqliteRunStore, run: RunRecord, clock: Clock): Ru
     latestBlocker: latestBlocker(store.listTurns(run.id)),
     latestCheckpoint: store.getLatestCheckpoint(run.id),
     lease,
+    outcomes: store.listOutcomes(run.id),
     pendingApprovals: store.listPendingApprovals(run.id),
     turns: store.listTurns(run.id),
   };
@@ -1716,6 +1731,8 @@ function renderRunStatus(status: RunStatusDocument): string {
     `usage.outputTokens: ${status.usage.outputTokens}`,
     `usage.reasoningTokens: ${status.usage.reasoningTokens}`,
     `stateFingerprint: ${status.stateFingerprint ?? "none"}`,
+    `lastUsefulOutcomeAt: ${status.lastUsefulOutcomeAt ?? "none"}`,
+    `outcomeCount: ${status.outcomes.length}`,
     `noProgressCount: ${status.noProgressCount}`,
     `consecutiveFailures: ${status.consecutiveFailures}`,
     `lastError: ${status.lastError ?? "none"}`,

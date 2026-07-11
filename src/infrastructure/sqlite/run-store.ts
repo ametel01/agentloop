@@ -7,6 +7,7 @@ import type {
   CreateRunInput,
   EventRecord,
   LeaseRecord,
+  OutcomeRecord,
   RunLimits,
   RunRecord,
   RunStatus,
@@ -38,6 +39,7 @@ interface RunRow {
   no_progress_count: number;
   consecutive_failures: number;
   state_fingerprint: string | null;
+  last_useful_outcome_at: string | null;
   created_at: string;
   updated_at: string;
   started_at: string | null;
@@ -73,6 +75,8 @@ export interface RunStore {
   updateSkillFingerprint(input: UpdateSkillFingerprintInput): RunRecord;
   updateProgress(input: UpdateProgressInput): RunRecord;
   updateUsage(input: UpdateUsageInput): RunRecord;
+  recordOutcomes(input: RecordOutcomesInput): OutcomeRecord[];
+  listOutcomes(runId: string): OutcomeRecord[];
   createTurn(input: CreateTurnInput): TurnRecord;
   completeTurn(input: CompleteTurnInput): TurnRecord;
   createCheckpoint(input: CreateCheckpointInput): CheckpointRecord;
@@ -115,6 +119,16 @@ export interface UpdateUsageInput {
   id: string;
   usageDelta: RunUsage;
   now: string;
+}
+
+export interface RecordOutcomesInput {
+  runId: string;
+  outcomes: Array<{
+    key: string;
+    type: string;
+    payloadJson: string;
+  }>;
+  observedAt: string;
 }
 
 export interface CreateTurnInput {
@@ -249,13 +263,14 @@ export class SqliteRunStore implements RunStore {
             no_progress_count,
             consecutive_failures,
             state_fingerprint,
+            last_useful_outcome_at,
             created_at,
             updated_at,
             started_at,
             finished_at,
             last_error
           ) VALUES (
-            ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, NULL, ?, ?, NULL, NULL, NULL
+            ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?, ?, NULL, NULL, NULL
           )
         `,
         )
@@ -493,6 +508,62 @@ export class SqliteRunStore implements RunStore {
     }
 
     return run;
+  }
+
+  recordOutcomes(input: RecordOutcomesInput): OutcomeRecord[] {
+    if (input.outcomes.length === 0) {
+      return [];
+    }
+
+    this.database.run("BEGIN IMMEDIATE");
+    try {
+      const inserted: OutcomeRecord[] = [];
+      for (const outcome of input.outcomes) {
+        const result = this.database
+          .query(
+            `
+            INSERT OR IGNORE INTO outcomes(run_id, key, type, payload_json, observed_at)
+            VALUES (?, ?, ?, ?, ?)
+          `,
+          )
+          .run(input.runId, outcome.key, outcome.type, outcome.payloadJson, input.observedAt);
+
+        if (result.changes === 1) {
+          inserted.push({
+            key: outcome.key,
+            observedAt: input.observedAt,
+            payload: JSON.parse(outcome.payloadJson),
+            runId: input.runId,
+            type: outcome.type,
+          });
+        }
+      }
+
+      if (inserted.length > 0) {
+        this.database
+          .query("UPDATE runs SET last_useful_outcome_at = ?, updated_at = ? WHERE id = ?")
+          .run(input.observedAt, input.observedAt, input.runId);
+      }
+
+      this.database.run("COMMIT");
+      return inserted;
+    } catch (error) {
+      this.database.run("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listOutcomes(runId: string): OutcomeRecord[] {
+    return this.database
+      .query<OutcomeRow, [string]>(
+        `
+        SELECT * FROM outcomes
+        WHERE run_id = ?
+        ORDER BY observed_at ASC, key ASC
+      `,
+      )
+      .all(runId)
+      .map(mapOutcome);
   }
 
   createTurn(input: CreateTurnInput): TurnRecord {
@@ -970,6 +1041,14 @@ interface CheckpointRow {
   created_at: string;
 }
 
+interface OutcomeRow {
+  run_id: string;
+  key: string;
+  type: string;
+  payload_json: string;
+  observed_at: string;
+}
+
 interface EventRow {
   run_id: string;
   sequence: number;
@@ -1014,6 +1093,7 @@ function mapRun(row: RunRow): RunRecord {
     noProgressCount: row.no_progress_count,
     consecutiveFailures: row.consecutive_failures,
     stateFingerprint: row.state_fingerprint,
+    lastUsefulOutcomeAt: row.last_useful_outcome_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,
@@ -1057,6 +1137,16 @@ function mapCheckpoint(row: CheckpointRow): CheckpointRecord {
     status: row.status,
     turnId: row.turn_id,
     usageComplete: row.usage_complete === 1,
+  };
+}
+
+function mapOutcome(row: OutcomeRow): OutcomeRecord {
+  return {
+    key: row.key,
+    observedAt: row.observed_at,
+    payload: JSON.parse(row.payload_json),
+    runId: row.run_id,
+    type: row.type,
   };
 }
 
