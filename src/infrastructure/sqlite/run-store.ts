@@ -12,6 +12,7 @@ import type {
   RunUsage,
   TurnRecord,
 } from "../../domain/run.ts";
+import { DEFAULT_RUN_LIMITS } from "../../domain/run.ts";
 import { canTransition } from "../../domain/state-machine.ts";
 
 interface RunRow {
@@ -888,7 +889,7 @@ function mapRun(row: RunRow): RunRecord {
     approvalMode: row.approval_mode,
     worktreeRoot: row.worktree_root,
     skillFingerprint: row.skill_fingerprint,
-    limits: JSON.parse(row.limits_json) as RunLimits,
+    limits: normalizeRunLimits(row.limits_json),
     turnsCompleted: row.turns_completed,
     usage: {
       inputTokens: row.total_input_tokens,
@@ -970,6 +971,54 @@ function mapApproval(row: ApprovalRow): ApprovalRequest {
 }
 
 function leaseExpiresAt(now: string, limitsJson: string): string {
-  const limits = JSON.parse(limitsJson) as RunLimits;
+  const limits = normalizeRunLimits(limitsJson);
   return new Date(Date.parse(now) + limits.leaseTtlMs).toISOString();
+}
+
+function normalizeRunLimits(limitsJson: string): RunLimits {
+  const parsed = JSON.parse(limitsJson) as Partial<RunLimits>;
+  return {
+    cooperativeTrancheMs: positiveNumberOrDefault(
+      parsed.cooperativeTrancheMs,
+      DEFAULT_RUN_LIMITS.cooperativeTrancheMs,
+    ),
+    eventStallWarningMs: positiveNumberOrDefault(
+      parsed.eventStallWarningMs,
+      DEFAULT_RUN_LIMITS.eventStallWarningMs,
+    ),
+    hardTurnDeadlineMs: positiveNumberOrDefault(
+      parsed.hardTurnDeadlineMs,
+      DEFAULT_RUN_LIMITS.hardTurnDeadlineMs,
+    ),
+    leaseRenewIntervalMs: positiveNumberOrDefault(
+      parsed.leaseRenewIntervalMs,
+      DEFAULT_RUN_LIMITS.leaseRenewIntervalMs,
+    ),
+    leaseTtlMs: positiveNumberOrDefault(parsed.leaseTtlMs, DEFAULT_RUN_LIMITS.leaseTtlMs),
+    maxConsecutiveStalls: positiveNumberOrDefault(
+      parsed.maxConsecutiveStalls,
+      DEFAULT_RUN_LIMITS.maxConsecutiveStalls,
+    ),
+    maxConsecutiveTurnFailures: positiveNumberOrDefault(
+      parsed.maxConsecutiveTurnFailures,
+      DEFAULT_RUN_LIMITS.maxConsecutiveTurnFailures,
+    ),
+    maxNoProgressTurns: positiveNumberOrDefault(
+      parsed.maxNoProgressTurns,
+      DEFAULT_RUN_LIMITS.maxNoProgressTurns,
+    ),
+    maxOuterTurns: positiveNumberOrDefault(parsed.maxOuterTurns, DEFAULT_RUN_LIMITS.maxOuterTurns),
+    maxTotalTokens: positiveNumberOrDefault(
+      parsed.maxTotalTokens,
+      DEFAULT_RUN_LIMITS.maxTotalTokens,
+    ),
+    maxWallDurationMs: positiveNumberOrDefault(
+      parsed.maxWallDurationMs,
+      DEFAULT_RUN_LIMITS.maxWallDurationMs,
+    ),
+  };
+}
+
+function positiveNumberOrDefault(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }

@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add bounded Codex tranche supervision with cooperative timeout, hard-deadline, and event-stall classification.
 - Add the label-scoped `dispatch` command for idempotent scheduled polling, dry runs, no-ready-issue no-ops, and already-active run detection.
 - Add `bun run install:global` for rebuilding and globally linking the local Agentloop checkout.
 - Add event replay, follow mode, and expanded run status for durable run inspection.
@@ -22,6 +23,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Enforce consecutive turn-failure limits before starting another Codex turn.
 - Keep interactive foreground sessions attached across paused open-run states and stream a compact structured roster with active/running/waiting/blocked counts, each agent's role and current task, coordinator decisions, and failures while hiding routine command/file/wait noise.
 - Add GitHub-visible label claim guidance for dispatched issues, including same-run recovery, different-run refusal, existing-PR reuse, and terminal blocker evidence.
 - Include the durable Agentloop run ID in coordinator prompt headers for GitHub claim and recovery correlation.

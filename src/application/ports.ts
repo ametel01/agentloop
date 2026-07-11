@@ -34,6 +34,10 @@ export interface Clock {
   now(): Date;
 }
 
+export interface Scheduler {
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
 export interface IdGenerator {
   randomId(): string;
 }

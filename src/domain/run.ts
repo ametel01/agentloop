@@ -16,7 +16,10 @@ export interface RunLimits {
   maxOuterTurns: number;
   maxTotalTokens: number;
   maxWallDurationMs: number;
+  cooperativeTrancheMs: number;
+  hardTurnDeadlineMs: number;
   maxConsecutiveTurnFailures: number;
+  maxConsecutiveStalls: number;
   maxNoProgressTurns: number;
   leaseTtlMs: number;
   leaseRenewIntervalMs: number;
@@ -27,11 +30,14 @@ export const DEFAULT_RUN_LIMITS: RunLimits = {
   maxOuterTurns: 25,
   maxTotalTokens: 5_000_000,
   maxWallDurationMs: 8 * 60 * 60 * 1000,
+  cooperativeTrancheMs: 10 * 60 * 1000,
+  hardTurnDeadlineMs: 11 * 60 * 1000,
   maxConsecutiveTurnFailures: 2,
+  maxConsecutiveStalls: 2,
   maxNoProgressTurns: 2,
   leaseTtlMs: 120_000,
   leaseRenewIntervalMs: 30_000,
-  eventStallWarningMs: 30 * 60 * 1000,
+  eventStallWarningMs: 4 * 60 * 1000,
 };
 
 export interface RunUsage {

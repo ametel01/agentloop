@@ -8,9 +8,15 @@ import { REQUIRED_SKILLS } from "../../src/application/doctor.ts";
 import type { Clock, IdGenerator } from "../../src/application/ports.ts";
 import { runCli } from "../../src/cli.ts";
 import type { CodexRunInput, CodexRunner } from "../../src/codex/client.ts";
+import { DEFAULT_RUN_LIMITS } from "../../src/domain/run.ts";
 import { openDatabase } from "../../src/infrastructure/sqlite/database.ts";
 import { SqliteRunStore } from "../../src/infrastructure/sqlite/run-store.ts";
-import { FakeCommandRunner, FakeFileSystem } from "../support/fakes.ts";
+import {
+  ControlledAsyncStream,
+  FakeCommandRunner,
+  FakeFileSystem,
+  FakeScheduler,
+} from "../support/fakes.ts";
 
 const tempDirs: string[] = [];
 
@@ -694,6 +700,155 @@ describe("foreground run", () => {
     expect(run.usage).toMatchObject({ inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
     expect(run.turns[0]?.status).toBe("completed");
     expect(run.turns[0]?.usage.inputTokens).toBe(0);
+  });
+
+  test("supervised cooperative tranche continues without cancellation or SDK failure", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+    const firstStream = new ControlledAsyncStream<ThreadEvent>();
+    const codexRunner = new ScriptedCodexRunner([
+      firstStream,
+      arrayStream(completeWithoutThreadStartedEvents()),
+    ]);
+    const scheduler = new FakeScheduler();
+
+    const foreground = runCli(
+      ["run", "--repo", ".", "--goal", "bounded tranche", "--trust-repo"],
+      { ...createDependencies(codexRunner), scheduler },
+      quietIo(),
+    );
+
+    await waitFor(() => codexRunner.inputs.length === 1);
+    scheduler.advanceNextMatching(DEFAULT_RUN_LIMITS.cooperativeTrancheMs);
+
+    expect(await foreground).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(2);
+    expect(codexRunner.inputs[1]?.threadId).toBeNull();
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      consecutiveFailures: number;
+      status: string;
+      turns: Array<{ errorJson: string | null; status: string }>;
+      turnsCompleted: number;
+    };
+
+    expect(run.status).toBe("complete");
+    expect(run.consecutiveFailures).toBe(0);
+    expect(run.turnsCompleted).toBe(1);
+    expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.errorJson).toContain("tranche_elapsed");
+    expect(run.turns[1]?.status).toBe("completed");
+  });
+
+  test("supervised event stall records a distinct recoverable failure reason", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+    const codexRunner = new ScriptedCodexRunner([new ControlledAsyncStream<ThreadEvent>()]);
+    const scheduler = new FakeScheduler();
+
+    const foreground = runCli(
+      ["run", "--repo", ".", "--goal", "stall stream", "--trust-repo"],
+      { ...createDependencies(codexRunner), scheduler },
+      quietIo(),
+    );
+
+    await waitFor(() => codexRunner.inputs.length === 1);
+    scheduler.advanceNextMatching(DEFAULT_RUN_LIMITS.eventStallWarningMs);
+
+    expect(await foreground).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      consecutiveFailures: number;
+      lastError: string | null;
+      status: string;
+      turns: Array<{ errorJson: string | null; status: string }>;
+    };
+
+    expect(run.status).toBe("failed");
+    expect(run.consecutiveFailures).toBe(1);
+    expect(run.lastError).toContain("event_stalled");
+    expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.errorJson).toContain("event_stalled");
+  });
+
+  test("supervised hard deadline records a distinct failure reason", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+    const codexRunner = new ScriptedCodexRunner([new ControlledAsyncStream<ThreadEvent>()]);
+    const scheduler = new FakeScheduler();
+
+    const foreground = runCli(
+      ["run", "--repo", ".", "--goal", "hard deadline", "--trust-repo"],
+      { ...createDependencies(codexRunner), scheduler },
+      quietIo(),
+    );
+
+    await waitFor(() => codexRunner.inputs.length === 1);
+    scheduler.advanceNextMatching(DEFAULT_RUN_LIMITS.hardTurnDeadlineMs);
+
+    expect(await foreground).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      lastError: string | null;
+      status: string;
+      turns: Array<{ errorJson: string | null; status: string }>;
+    };
+
+    expect(run.status).toBe("failed");
+    expect(run.lastError).toContain("hard_deadline");
+    expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.errorJson).toContain("hard_deadline");
+  });
+
+  test("maxConsecutiveTurnFailures stops a failed run before another SDK turn starts", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    await runCli(
+      ["run", "--repo", ".", "--goal", "failure cap", "--trust-repo"],
+      createDependencies(new ThrowingCodexRunner("first failure")),
+      quietIo(),
+    );
+
+    const database = await openDatabase({ path: join(stateDir, "agentloop.sqlite") });
+    database
+      .query("UPDATE runs SET limits_json = ? WHERE id = ?")
+      .run(JSON.stringify({ ...DEFAULT_RUN_LIMITS, maxConsecutiveTurnFailures: 1 }), "id-1");
+    database.close();
+
+    const resumeRunner = new FakeCodexRunner(completeEvents());
+    const exitCode = await runCli(["resume", "id-1"], createDependencies(resumeRunner), quietIo());
+
+    expect(exitCode).toBe(0);
+    expect(resumeRunner.inputs).toHaveLength(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as { lastError: string | null; status: string };
+    expect(run.status).toBe("budget_exhausted");
+    expect(run.lastError).toContain("maximum consecutive turn failures exhausted");
   });
 
   test("worker --once executes a detached queued run", async () => {
@@ -1457,6 +1612,30 @@ function threadStartedThenErrorEvents(): ThreadEvent[] {
       type: "error",
     },
   ];
+}
+
+async function* arrayStream(events: readonly ThreadEvent[]): AsyncGenerator<ThreadEvent> {
+  for (const event of events) {
+    yield event;
+  }
+}
+
+class ScriptedCodexRunner implements CodexRunner {
+  readonly inputs: CodexRunInput[] = [];
+  private nextBatch = 0;
+
+  constructor(private readonly streams: readonly AsyncIterable<ThreadEvent>[]) {}
+
+  async runStreamed(input: CodexRunInput): Promise<AsyncIterable<ThreadEvent>> {
+    this.inputs.push(input);
+    const stream = this.streams[this.nextBatch];
+    this.nextBatch += 1;
+    if (stream === undefined) {
+      throw new Error("No scripted Codex stream");
+    }
+
+    return stream;
+  }
 }
 
 class FakeCodexRunner implements CodexRunner {

@@ -6,6 +6,7 @@ import type {
   CommandRunner,
   FileStat,
   FileSystem,
+  Scheduler,
 } from "../../src/application/ports.ts";
 import type { CodexRunInput, CodexRunner } from "../../src/codex/client.ts";
 
@@ -168,11 +169,12 @@ export class ControlledCodexRunner implements CodexRunner {
   }
 }
 
-export class FakeScheduler {
+export class FakeScheduler implements Scheduler {
   readonly sleeps: Array<{ ms: number; signal?: AbortSignal }> = [];
   private readonly pending: Array<{
     reject: (error: Error) => void;
     resolve: () => void;
+    ms: number;
     signal?: AbortSignal;
   }> = [];
 
@@ -184,7 +186,8 @@ export class FakeScheduler {
     }
 
     return new Promise((resolve, reject) => {
-      const pending = signal === undefined ? { reject, resolve } : { reject, resolve, signal };
+      const pending =
+        signal === undefined ? { ms, reject, resolve } : { ms, reject, resolve, signal };
       this.pending.push(pending);
       signal?.addEventListener(
         "abort",
@@ -199,6 +202,16 @@ export class FakeScheduler {
 
   advanceNext(): void {
     const pending = this.pending.shift();
+    pending?.resolve();
+  }
+
+  advanceNextMatching(ms: number): void {
+    const index = this.pending.findIndex((pending) => pending.ms === ms);
+    if (index < 0) {
+      throw new Error(`No pending sleep for ${ms}ms`);
+    }
+
+    const pending = this.pending.splice(index, 1)[0];
     pending?.resolve();
   }
 

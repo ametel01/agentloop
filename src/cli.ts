@@ -3,15 +3,18 @@
 import { parseArgs } from "node:util";
 import { join } from "node:path";
 import { homedir, hostname } from "node:os";
-import type { Usage } from "@openai/codex-sdk";
 
+import {
+  BoundedTurnSupervisor,
+  type TrancheAbortReason,
+} from "./application/bounded-turn-supervisor.ts";
 import { runDoctor, type DoctorDependencies } from "./application/doctor.ts";
 import { buildDispatchObjective, discoverReadyIssues } from "./application/dispatch.ts";
 import { resolveStateDir } from "./application/paths.ts";
-import type { Clock, IdGenerator } from "./application/ports.ts";
+import type { Clock, IdGenerator, Scheduler } from "./application/ports.ts";
 import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "./codex/control-envelope.ts";
 import { ProductionCodexRunner, type CodexRunner } from "./codex/client.ts";
-import { agentMessageText, eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
+import { eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
 import {
   buildApprovalResponsePrompt,
   buildContinuationPrompt,
@@ -36,6 +39,7 @@ import { NodeFileSystem } from "./infrastructure/filesystem.ts";
 import { collectProgressFingerprint } from "./infrastructure/fingerprint.ts";
 import { SystemClock } from "./infrastructure/clock.ts";
 import { RandomIdGenerator } from "./infrastructure/ids.ts";
+import { SystemScheduler } from "./infrastructure/scheduler.ts";
 import { sha256Hex } from "./infrastructure/hash.ts";
 import { openDatabase } from "./infrastructure/sqlite/database.ts";
 import { SqliteRunStore } from "./infrastructure/sqlite/run-store.ts";
@@ -85,6 +89,7 @@ export interface CliDependencies extends DoctorDependencies {
   codexRunner?: CodexRunner;
   idGenerator?: IdGenerator;
   monitorPollIntervalMs?: number;
+  scheduler?: Scheduler;
 }
 
 export async function runCli(
@@ -673,51 +678,89 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
 
   try {
     const runner = dependencies.codexRunner ?? new ProductionCodexRunner();
-    const events = await runner.runStreamed({
-      outputSchema: CONTROL_ENVELOPE_SCHEMA,
-      prompt,
+    const supervisor = new BoundedTurnSupervisor(
+      dependencies.scheduler ?? new SystemScheduler(),
+      BoundedTurnSupervisor.policyFromLimits(run.limits),
+    );
+    const outcome = await supervisor.runTranche({
+      onEvent: (event) => {
+        const createdAt = clock.now().toISOString();
+        const eventRecord =
+          event.type === "thread.started"
+            ? store.recordThreadStarted({
+                createdAt,
+                eventType: event.type,
+                itemId: null,
+                payloadJson: eventPayloadJson(event),
+                runId: run.id,
+                threadId: event.thread_id,
+                turnId,
+              })
+            : store.appendEvent({
+                createdAt,
+                eventType: event.type,
+                itemId: eventItemId(event),
+                payloadJson: eventPayloadJson(event),
+                runId: run.id,
+                turnId,
+              });
+
+        io.stdout(renderEventText(eventRecord));
+      },
+      request: {
+        outputSchema: CONTROL_ENVELOPE_SCHEMA,
+        prompt,
+        threadId: turnKind === "initial" ? null : run.threadId,
+        threadOptions: buildThreadOptions({
+          model: run.model,
+          reasoningEffort: run.reasoningEffort,
+          repoPath: run.repoPath,
+          worktreeRoot: run.worktreeRoot,
+        }),
+      },
+      runner,
       signal,
-      threadId: turnKind === "initial" ? null : run.threadId,
-      threadOptions: buildThreadOptions({
-        model: run.model,
-        reasoningEffort: run.reasoningEffort,
-        repoPath: run.repoPath,
-        worktreeRoot: run.worktreeRoot,
-      }),
     });
 
-    for await (const event of events) {
-      const createdAt = clock.now().toISOString();
-      const eventRecord =
-        event.type === "thread.started"
-          ? store.recordThreadStarted({
-              createdAt,
-              eventType: event.type,
-              itemId: null,
-              payloadJson: eventPayloadJson(event),
-              runId: run.id,
-              threadId: event.thread_id,
-              turnId,
-            })
-          : store.appendEvent({
-              createdAt,
-              eventType: event.type,
-              itemId: eventItemId(event),
-              payloadJson: eventPayloadJson(event),
-              runId: run.id,
-              turnId,
-            });
+    finalText = outcome.finalText;
+    usage = outcome.usage;
 
-      io.stdout(renderEventText(eventRecord));
-      finalText = agentMessageText(event) ?? finalText;
-
-      if (event.type === "turn.completed") {
-        usage = mapUsage(event.usage);
+    if (outcome.status === "aborted") {
+      if (outcome.abortReason === "sdk_failed") {
+        throw new Error(outcome.errorMessage);
       }
 
-      if (event.type === "turn.failed" || event.type === "error") {
-        throw new Error(event.type === "turn.failed" ? event.error.message : event.message);
-      }
+      store.completeTurn({
+        errorJson: JSON.stringify({
+          message: outcome.errorMessage,
+          reason: outcome.abortReason,
+        }),
+        fingerprintAfter: null,
+        finishedAt: clock.now().toISOString(),
+        id: turnId,
+        responseJson: finalText,
+        status: outcome.abortReason === "operator_cancelled" ? "cancelled" : "aborted",
+        usage,
+      });
+      const latestRun = requireRun(store, run.id);
+      const consecutiveFailures = shouldCountTrancheFailure(outcome.abortReason)
+        ? latestRun.consecutiveFailures + 1
+        : latestRun.consecutiveFailures;
+      store.updateProgress({
+        consecutiveFailures,
+        id: latestRun.id,
+        noProgressCount: latestRun.noProgressCount,
+        now: clock.now().toISOString(),
+        stateFingerprint: latestRun.stateFingerprint ?? "",
+      });
+
+      return store.transitionRun({
+        expectedStatus: "running",
+        id: run.id,
+        nextStatus: trancheAbortStatus(outcome.abortReason),
+        now: clock.now().toISOString(),
+        reason: outcome.errorMessage,
+      });
     }
 
     if (finalText === null) {
@@ -843,6 +886,10 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
 }
 
 function budgetExhaustionReason(run: RunRecord, now: Date): string | null {
+  if (run.consecutiveFailures >= run.limits.maxConsecutiveTurnFailures) {
+    return `maximum consecutive turn failures exhausted (${run.limits.maxConsecutiveTurnFailures})`;
+  }
+
   if (run.turnsCompleted >= run.limits.maxOuterTurns) {
     return `maximum outer turns exhausted (${run.limits.maxOuterTurns})`;
   }
@@ -947,13 +994,21 @@ function envelopeStatusToRunStatus(
   return status === "continue" ? "continuing" : status;
 }
 
-function mapUsage(usage: Usage): RunUsage {
-  return {
-    cachedInputTokens: usage.cached_input_tokens,
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    reasoningTokens: usage.reasoning_output_tokens,
-  };
+function trancheAbortStatus(reason: TrancheAbortReason): RunRecord["status"] {
+  switch (reason) {
+    case "operator_cancelled":
+      return "cancelled";
+    case "tranche_elapsed":
+      return "continuing";
+    case "event_stalled":
+    case "hard_deadline":
+    case "sdk_failed":
+      return "failed";
+  }
+}
+
+function shouldCountTrancheFailure(reason: TrancheAbortReason): boolean {
+  return reason === "event_stalled" || reason === "hard_deadline" || reason === "sdk_failed";
 }
 
 function zeroUsage(): RunUsage {

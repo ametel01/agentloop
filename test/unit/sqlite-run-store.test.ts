@@ -73,17 +73,26 @@ describe("SQLite run store", () => {
   test("reads version-1 run limit payloads without losing persisted policy", async () => {
     const database = await openDatabase({ path: await tempDatabasePath() });
     const store = new SqliteRunStore(database);
+    store.createRun(createRunInput({ id: "run-1" }));
     const version1Limits = {
-      ...DEFAULT_RUN_LIMITS,
       eventStallWarningMs: 123_456,
+      leaseRenewIntervalMs: DEFAULT_RUN_LIMITS.leaseRenewIntervalMs,
+      leaseTtlMs: DEFAULT_RUN_LIMITS.leaseTtlMs,
+      maxConsecutiveTurnFailures: DEFAULT_RUN_LIMITS.maxConsecutiveTurnFailures,
+      maxNoProgressTurns: DEFAULT_RUN_LIMITS.maxNoProgressTurns,
       maxOuterTurns: 3,
+      maxTotalTokens: DEFAULT_RUN_LIMITS.maxTotalTokens,
+      maxWallDurationMs: DEFAULT_RUN_LIMITS.maxWallDurationMs,
     };
-
-    store.createRun(createRunInput({ id: "run-1", limits: version1Limits }));
+    database
+      .query("UPDATE runs SET limits_json = ? WHERE id = ?")
+      .run(JSON.stringify(version1Limits), "run-1");
 
     const run = store.getRun("run-1");
     expect(run?.limits.maxOuterTurns).toBe(3);
     expect(run?.limits.eventStallWarningMs).toBe(123_456);
+    expect(run?.limits.cooperativeTrancheMs).toBe(DEFAULT_RUN_LIMITS.cooperativeTrancheMs);
+    expect(run?.limits.hardTurnDeadlineMs).toBe(DEFAULT_RUN_LIMITS.hardTurnDeadlineMs);
     expect(run?.limits.leaseTtlMs).toBe(DEFAULT_RUN_LIMITS.leaseTtlMs);
     database.close();
   });

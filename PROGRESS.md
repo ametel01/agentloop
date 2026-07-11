@@ -15,7 +15,7 @@
 
 - [x] Step 0: Progress and changelog tracking setup.
 - [x] Step 1: Characterize current turn, cancellation, and persistence semantics.
-- [ ] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
+- [x] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
 - [ ] Step 3: Persist typed checkpoints and complete usage state.
 - [ ] Step 4: Replace activity fingerprints with `OutcomeProgress`.
 - [ ] Step 5: Split compact checkpoints from final control messages.
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 1 complete and validated.
-- Next step: Step 2 supervisor extraction and bounded tranche enforcement after the Step 1 commit.
+- Status: Step 2 complete and validated.
+- Next step: Step 3 durable typed checkpoints and usage completeness after the Step 2 commit.
 
 ## Update Rules
 
@@ -51,6 +51,10 @@
 - 2026-07-11: Step 1 added deterministic controlled stream and fake scheduler support for Step 2 deadline/stall tests, plus a SQLite v1 limits readability test.
 - 2026-07-11: Step 1 validation passed: targeted `bun test test/unit/foreground-run.test.ts test/unit/sqlite-run-store.test.ts --timeout 10000`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 76 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 1 Agentloop commit subject: `test: characterize bounded turn termination semantics`.
+- 2026-07-11: Step 2 added `BoundedTurnSupervisor`, an injectable scheduler, production scheduler, cooperative tranche and hard-deadline run limits, legacy limit normalization, event-stall classification, and failure-cap enforcement before another SDK turn starts.
+- 2026-07-11: Step 2 tests covered cooperative tranche continuation into a second turn, distinct event-stall and hard-deadline failures, current SDK failure/cancellation behavior, missing official usage characterization, and version-1 limits defaulting.
+- 2026-07-11: Step 2 validation passed: targeted `bun test test/unit/foreground-run.test.ts test/unit/sqlite-run-store.test.ts --timeout 10000`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 80 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 2 Agentloop commit subject: `feat: bound Codex work into supervised tranches`.
 
 ---
 
