@@ -88,7 +88,11 @@ The queued objective stores only the immutable dispatch marker and sorted issue 
 bun src/cli.ts run --repo /path/to/repo --goal "Close issues #10 through #12" --trust-repo
 ```
 
-Foreground mode creates the durable run row, acquires the repository lease, starts a Codex coordinator turn, streams events, stores the Codex thread ID when available, and stops only when the final control envelope says complete, waiting for approval, blocked, exhausted, stuck, failed, or cancelled.
+Foreground mode creates the durable run row, acquires the repository lease, starts a Codex coordinator turn, streams full redacted event details, and stores the Codex thread ID when available. In an interactive terminal, a run that pauses for approval, an external blocker, exhaustion, or no progress keeps the foreground monitor attached. The monitor shows events produced by another resume or approval process and stays open until the run completes, is cancelled, or the operator presses Ctrl-C to detach. Non-interactive callers return when execution pauses so scripts do not hang.
+
+When approval is required, the attached monitor prints the exact `approve` and `reject` commands to run from another terminal. A recoverable execution error is also persisted and keeps an interactive monitor attached with the exact `resume` command. Non-interactive callers, or an operator who detaches while the run is still failed, receive the nonzero execution result.
+
+The default text event stream is a compact human view. Every coordinator update shows the number of active, running, waiting, and blocked subagents, followed by each active agent's canonical name, role, current task, and status. Routine successful commands, file-change events, and empty collaboration waits are hidden; decisions, command failures, approvals, blockers, and turn results remain visible. Raw command and SDK payload replay remains available with `events RUN_ID --json`.
 
 Model selection:
 

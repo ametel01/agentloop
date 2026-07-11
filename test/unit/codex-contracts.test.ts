@@ -33,6 +33,7 @@ describe("Codex contracts", () => {
     expect(() =>
       parseControlEnvelope(
         JSON.stringify({
+          agents: noActiveAgents(),
           approval: null,
           blocker: null,
           closureGatePassed: false,
@@ -53,6 +54,7 @@ describe("Codex contracts", () => {
     expect(() =>
       parseControlEnvelope(
         JSON.stringify({
+          agents: noActiveAgents(),
           approval: null,
           blocker: null,
           closureGatePassed: false,
@@ -77,6 +79,7 @@ describe("Codex contracts", () => {
   test("parses structured approval operations", () => {
     const envelope = parseControlEnvelope(
       JSON.stringify({
+        agents: noActiveAgents(),
         approval: {
           kind: "human_merge",
           operation: {
@@ -106,6 +109,7 @@ describe("Codex contracts", () => {
   test("parses blocker evidence as a list of exact observations", () => {
     const envelope = parseControlEnvelope(
       JSON.stringify({
+        agents: noActiveAgents(),
         approval: null,
         blocker: {
           attemptedOperation: "gh pr merge 123",
@@ -131,6 +135,39 @@ describe("Codex contracts", () => {
     ]);
   });
 
+  test("parses an exact active subagent roster", () => {
+    const envelope = parseControlEnvelope(
+      JSON.stringify({
+        agents: {
+          coordinator: { status: "working", task: "Route completed builder work." },
+          subagents: [
+            {
+              name: "/root/checker_238",
+              role: "checker-agent",
+              status: "running",
+              task: "Verify PR 251 at the exact pushed head.",
+            },
+          ],
+        },
+        approval: null,
+        blocker: null,
+        closureGatePassed: false,
+        evidence: { issueUrls: [], prUrls: [], reviewUrls: [], statusPath: "STATUS.md" },
+        status: "continue",
+        summary: "Checker 238 is active.",
+      }),
+    );
+
+    expect(envelope.agents.subagents).toEqual([
+      {
+        name: "/root/checker_238",
+        role: "checker-agent",
+        status: "running",
+        task: "Verify PR 251 at the exact pushed head.",
+      },
+    ]);
+  });
+
   test("adds durable run identity to every coordinator prompt header", () => {
     const run = createRunRecord();
     const prompts = [
@@ -143,6 +180,9 @@ describe("Codex contracts", () => {
     for (const prompt of prompts) {
       expect(countOccurrences(prompt, "Run ID: run-123")).toBe(1);
       expect(prompt.indexOf("Run ID: run-123")).toBeLessThan(prompt.indexOf("<target_work>"));
+      expect(prompt).toContain("Keep the human operator informed during the turn");
+      expect(prompt).toContain("every active subagent's canonical name, role, current task");
+      expect(prompt).toContain("do not expose private chain-of-thought");
       expect(prompt).not.toContain("process.env");
       expect(prompt).not.toContain("OPENAI_API_KEY");
       expect(prompt).not.toContain("GITHUB_TOKEN");
@@ -185,6 +225,13 @@ function createRunRecord(): RunRecord {
 
 function countOccurrences(value: string, needle: string): number {
   return value.split(needle).length - 1;
+}
+
+function noActiveAgents() {
+  return {
+    coordinator: { status: "working", task: "Coordinate the current dev-team turn." },
+    subagents: [],
+  } as const;
 }
 
 function assertStrictSchema(value: unknown, path: string): void {

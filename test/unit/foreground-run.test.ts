@@ -56,6 +56,43 @@ describe("foreground run", () => {
     expect(run.usage.inputTokens).toBe(10);
   });
 
+  test("renders coordinator decisions, commands, plans, and subagent lifecycle details", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-observable-events-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const stdout: string[] = [];
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "show useful activity", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(observableEvents())),
+      {
+        stdout: (message) => stdout.push(message),
+        stderr: () => {},
+      },
+    );
+
+    const output = stdout.join("");
+    expect(exitCode).toBe(0);
+    expect(output).toContain("run: id-1");
+    expect(output).toContain("update [continue] › I found two independent issues");
+    expect(output).toContain("agents: 2 active · 1 running · 1 waiting · 0 blocked");
+    expect(output).toContain("coordinator [working] — Coordinate issues 42 and 43.");
+    expect(output).toContain(
+      "/root/builder_42 [builder-agent, running] — Implement issue 42 in an isolated worktree.",
+    );
+    expect(output).toContain(
+      "/root/checker_43 [checker-agent, waiting] — Wait for the issue 43 builder handoff.",
+    );
+    expect(output).toContain("coordinator decision › Issues 42 and 43 can run in parallel");
+    expect(output).toContain("orchestrator › starting subagent issue_42");
+    expect(output).toContain("objective: Implement issue 42 in an isolated worktree.");
+    expect(output).toContain("orchestrator ✓ started subagent issue_42");
+    expect(output).toContain("orchestrator plan › [ ] Implement issue 42");
+    expect(output).toContain("update [complete] › done");
+    expect(output).not.toContain("command[item-command]");
+    expect(output).not.toContain("file changes · update src/example.ts");
+  });
+
   test("marks the run failed when the final envelope is malformed", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
     tempDirs.push(stateDir);
@@ -83,6 +120,42 @@ describe("foreground run", () => {
     const run = JSON.parse(statusJson.join("")) as { status: string; lastError: string };
     expect(run.status).toBe("failed");
     expect(run.lastError).toContain("Malformed control envelope JSON");
+  });
+
+  test("keeps an interactive foreground monitor attached after a recoverable failure", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-failure-monitor-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const foreground = runCli(
+      ["run", "--repo", ".", "--goal", "recover while attached", "--trust-repo"],
+      {
+        ...createDependencies(new ThrowingCodexRunner("spawn failed")),
+        monitorPollIntervalMs: 1,
+      },
+      {
+        interactive: true,
+        stdout: (message) => stdout.push(message),
+        stderr: (message) => stderr.push(message),
+      },
+    );
+
+    await waitFor(() => stdout.join("").includes("monitor: attached to id-1"));
+
+    const resumeExit = await runCli(
+      ["resume", "id-1", "--message", "retry from another terminal"],
+      createDependencies(new FakeCodexRunner(completeEvents())),
+      quietIo(),
+    );
+
+    expect(resumeExit).toBe(0);
+    expect(await foreground).toBe(0);
+    expect(stderr.join("")).toContain("execution: failed; spawn failed");
+    expect(stdout.join("")).toContain("status: failed");
+    expect(stdout.join("")).toContain("operator: agentloop resume id-1");
+    expect(stdout.join("")).toContain("status: failed -> complete");
   });
 
   test("continues on the same durable thread after a continue envelope", async () => {
@@ -236,6 +309,42 @@ describe("foreground run", () => {
     expect(run.status).toBe("waiting_approval");
     expect(run.pendingApprovals).toHaveLength(1);
     expect(run.pendingApprovals[0]?.kind).toBe("human_merge");
+  });
+
+  test("keeps an interactive foreground monitor attached across approval", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-monitor-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const stdout: string[] = [];
+    const foregroundDependencies = {
+      ...createDependencies(new FakeCodexRunner(waitingApprovalEvents())),
+      monitorPollIntervalMs: 1,
+    };
+    const foreground = runCli(
+      ["run", "--repo", ".", "--goal", "stay observable", "--trust-repo"],
+      foregroundDependencies,
+      {
+        interactive: true,
+        stdout: (message) => stdout.push(message),
+        stderr: () => {},
+      },
+    );
+
+    await waitFor(() => stdout.join("").includes("monitor: attached to id-1"));
+
+    const approveExit = await runCli(
+      ["approve", "id-1", "--message", "approved from another terminal"],
+      createDependencies(new FakeCodexRunner(completeWithoutThreadStartedEvents())),
+      quietIo(),
+    );
+
+    expect(approveExit).toBe(0);
+    expect(await foreground).toBe(0);
+    expect(stdout.join("")).toContain("update [waiting_approval]");
+    expect(stdout.join("")).toContain("status: waiting_approval");
+    expect(stdout.join("")).toContain("status: waiting_approval -> complete");
+    expect(stdout.join("")).toContain("operator: agentloop approve id-1");
   });
 
   test("approves exactly one pending approval and resumes with approval-response prompt", async () => {
@@ -742,9 +851,9 @@ describe("foreground run", () => {
     });
 
     expect(textExit).toBe(0);
-    expect(textOutput.join("")).toContain("harness: thread.started");
-    expect(textOutput.join("")).toContain("model: agent_message");
-    expect(textOutput.join("")).toContain("usage=input=10");
+    expect(textOutput.join("")).toContain("orchestrator · thread started");
+    expect(textOutput.join("")).toContain("update [complete]");
+    expect(textOutput.join("")).toContain("input=10");
   });
 
   test("status includes turns, usage, lease, blocker, and harness labels", async () => {
@@ -813,7 +922,7 @@ describe("foreground run", () => {
     setTimeout(() => process.emit("SIGINT"), 0);
 
     await expect(follow).resolves.toBe(0);
-    expect(output.join("")).toContain("harness: thread.started");
+    expect(output.join("")).toContain("orchestrator · thread started");
   });
 
   test("secret fixtures are redacted in database, event output, and status output", async () => {
@@ -940,8 +1049,147 @@ function quietIo() {
   };
 }
 
+function noActiveAgents() {
+  return {
+    coordinator: { status: "complete", task: "Finish the current coordinator turn." },
+    subagents: [],
+  } as const;
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await Bun.sleep(5);
+  }
+
+  throw new Error("timed out waiting for foreground monitor output");
+}
+
 function completeEvents(): ThreadEvent[] {
   return completeEnvelopeEvents({ includeThreadStarted: true, status: "complete" });
+}
+
+function observableEvents(): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      item: {
+        id: "item-plan",
+        items: [{ completed: false, text: "Implement issue 42" }],
+        type: "todo_list",
+      },
+      type: "item.started",
+    },
+    {
+      item: {
+        id: "item-progress",
+        text: JSON.stringify({
+          agents: {
+            coordinator: {
+              status: "working",
+              task: "Coordinate issues 42 and 43.",
+            },
+            subagents: [
+              {
+                name: "/root/builder_42",
+                role: "builder-agent",
+                status: "running",
+                task: "Implement issue 42 in an isolated worktree.",
+              },
+              {
+                name: "/root/checker_43",
+                role: "checker-agent",
+                status: "waiting",
+                task: "Wait for the issue 43 builder handoff.",
+              },
+            ],
+          },
+          approval: null,
+          blocker: null,
+          closureGatePassed: false,
+          evidence: { issueUrls: [], prUrls: [], reviewUrls: [], statusPath: "STATUS.md" },
+          status: "continue",
+          summary: "I found two independent issues and assigned their current work.",
+        }),
+        type: "agent_message",
+      },
+      type: "item.completed",
+    },
+    {
+      item: {
+        id: "item-reasoning",
+        text: "Issues 42 and 43 can run in parallel because they touch separate packages.",
+        type: "reasoning",
+      },
+      type: "item.completed",
+    },
+    {
+      item: {
+        aggregated_output: "",
+        command: "/bin/zsh -lc 'git status --short'",
+        id: "item-command",
+        status: "in_progress",
+        type: "command_execution",
+      },
+      type: "item.started",
+    },
+    {
+      item: {
+        aggregated_output: "## main...origin/main\n",
+        command: "/bin/zsh -lc 'git status --short'",
+        exit_code: 0,
+        id: "item-command",
+        status: "completed",
+        type: "command_execution",
+      },
+      type: "item.completed",
+    },
+    {
+      item: {
+        arguments: {
+          message: "Implement issue 42 in an isolated worktree.",
+          task_name: "issue_42",
+        },
+        id: "item-agent",
+        server: "collaboration",
+        status: "in_progress",
+        tool: "spawn_agent",
+        type: "mcp_tool_call",
+      },
+      type: "item.started",
+    },
+    {
+      item: {
+        arguments: {
+          message: "Implement issue 42 in an isolated worktree.",
+          task_name: "issue_42",
+        },
+        id: "item-agent",
+        result: {
+          content: [],
+          structured_content: { agent_id: "agent-42", task_name: "issue_42" },
+        },
+        server: "collaboration",
+        status: "completed",
+        tool: "spawn_agent",
+        type: "mcp_tool_call",
+      },
+      type: "item.completed",
+    },
+    {
+      item: {
+        changes: [{ kind: "update", path: "src/example.ts" }],
+        id: "item-files",
+        status: "completed",
+        type: "file_change",
+      },
+      type: "item.completed",
+    },
+    ...completeWithoutThreadStartedEvents().slice(1),
+  ];
 }
 
 function completeWithoutThreadStartedEvents(): ThreadEvent[] {
@@ -960,6 +1208,7 @@ function waitingApprovalEvents(): ThreadEvent[] {
       item: {
         id: "message-1",
         text: JSON.stringify({
+          agents: noActiveAgents(),
           approval: {
             kind: "human_merge",
             operation: {
@@ -1011,6 +1260,7 @@ function completeEnvelopeEvents(options: {
       item: {
         id: "message-1",
         text: JSON.stringify({
+          agents: noActiveAgents(),
           approval: null,
           blocker: null,
           closureGatePassed: options.status === "complete",
@@ -1056,6 +1306,7 @@ function secretCompleteEvents(secret: string): ThreadEvent[] {
       item: {
         id: "message-1",
         text: JSON.stringify({
+          agents: noActiveAgents(),
           approval: null,
           blocker: null,
           closureGatePassed: true,

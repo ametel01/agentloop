@@ -114,6 +114,10 @@ For dispatched runs, inspect the issue comments and labels before manual recover
 
 If installed skill fingerprints change, resume uses the existing skill-change approval checkpoint. Approve the checkpoint or resume with `--accept-skill-change` only after accepting the new skill behavior.
 
+Interactive foreground `run`, `resume`, and `approve` sessions remain attached when a control envelope pauses an open run or a turn fails after durable failure state is recorded. They stream a redacted operator view of event activity, print the required operator command for the paused state, and observe events written by recovery commands in another terminal. Press Ctrl-C while the monitor is paused to detach without cancelling the durable run. Non-interactive invocations return at the pause boundary, and failed executions retain a nonzero result when detached before recovery.
+
+Text logs translate SDK transport events into a compact roster and decision stream. Every control-envelope update reports active/running/waiting/blocked subagent counts and lists each active agent's canonical name, role, current task, and status. Successful command events, successful file changes, and empty native collaboration waits are hidden; failures and material coordinator summaries remain visible. Use `events RUN_ID --json` when the full persisted SDK payload or command transcript is needed.
+
 ## Stale Leases
 
 Leases expire according to the run's persisted `leaseTtlMs`. A worker claims expired leases only for `running` or `continuing` runs and resumes through the recovery prompt. Waiting approval, externally blocked, stuck, exhausted, failed, cancelled, and complete runs are not automatically resumed by workers.

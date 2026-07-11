@@ -346,6 +346,7 @@ function completeEnvelopeEvents(options: { includeThreadStarted: boolean }): Thr
       item: {
         id: "message-1",
         text: JSON.stringify({
+          agents: noActiveAgents(),
           approval: null,
           blocker: null,
           closureGatePassed: true,
@@ -377,6 +378,7 @@ function waitingApprovalEvents(): ThreadEvent[] {
       item: {
         id: "message-1",
         text: JSON.stringify({
+          agents: noActiveAgents(),
           approval: {
             kind: "human_merge",
             operation: {
@@ -407,6 +409,13 @@ function waitingApprovalEvents(): ThreadEvent[] {
       },
     },
   ];
+}
+
+function noActiveAgents() {
+  return {
+    coordinator: { status: "complete", task: "Finish the current coordinator turn." },
+    subagents: [],
+  } as const;
 }
 
 function secretErrorEvents(): ThreadEvent[] {

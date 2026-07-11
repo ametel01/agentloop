@@ -75,6 +75,7 @@ Commands:
 `;
 
 export interface CliIo {
+  interactive?: boolean;
   stdout: (message: string) => void;
   stderr: (message: string) => void;
 }
@@ -83,14 +84,16 @@ export interface CliDependencies extends DoctorDependencies {
   clock?: Clock;
   codexRunner?: CodexRunner;
   idGenerator?: IdGenerator;
+  monitorPollIntervalMs?: number;
 }
 
 export async function runCli(
   args: readonly string[],
   dependencies = createProductionDependencies(),
   io: CliIo = {
-    stdout: (message) => console.log(message),
-    stderr: (message) => console.error(message),
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    stdout: (message) => process.stdout.write(message),
+    stderr: (message) => process.stderr.write(message),
   },
 ): Promise<number> {
   try {
@@ -249,7 +252,9 @@ async function runCommand(
     return EXIT_CODES.ok;
   }
 
-  const completed = await executeRun({
+  io.stdout(`run: ${run.id}\nrepo: ${run.repoPath}\nobjective: ${run.objective}\n`);
+
+  const completed = await executeForegroundRun({
     approvalId: null,
     dependencies,
     firstTurnKind: "initial",
@@ -522,6 +527,119 @@ async function executeRun(input: ExecuteRunInput): Promise<RunRecord> {
   }
 }
 
+async function executeForegroundRun(input: ExecuteRunInput): Promise<RunRecord> {
+  try {
+    const executed = await executeRun(input);
+    return await monitorOpenRun(executed, input.store, input.dependencies, input.io);
+  } catch (error) {
+    if (!input.io.interactive) {
+      throw error;
+    }
+
+    const failedRun = requireRun(input.store, input.run.id);
+    if (failedRun.status !== "failed") {
+      throw error;
+    }
+
+    const message = redactText(error instanceof Error ? error.message : String(error));
+    input.io.stderr(`execution: failed; ${message}\n`);
+    const observed = await monitorOpenRun(failedRun, input.store, input.dependencies, input.io);
+    if (observed.status === "failed") {
+      throw error;
+    }
+
+    return observed;
+  }
+}
+
+async function monitorOpenRun(
+  run: RunRecord,
+  store: SqliteRunStore,
+  dependencies: CliDependencies,
+  io: CliIo,
+): Promise<RunRecord> {
+  if (!io.interactive || isTerminalStatus(run.status)) {
+    return run;
+  }
+
+  io.stdout(renderRun(run, store.listPendingApprovals(run.id)));
+  io.stdout(
+    `monitor: attached to ${run.id}; waiting for complete or cancelled (Ctrl-C detaches)\n`,
+  );
+  io.stdout(renderOperatorAction(run));
+
+  let afterSequence = store.countEvents(run.id);
+  let currentRun = run;
+  let shuttingDown = false;
+  let stopPolling = () => {};
+  const stopped = new Promise<void>((resolve) => {
+    stopPolling = resolve;
+  });
+  const stop = () => {
+    shuttingDown = true;
+    stopPolling();
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+
+  try {
+    while (!shuttingDown) {
+      const events = store.listEvents(run.id, afterSequence, 100);
+      for (const event of events) {
+        io.stdout(renderEventText(event));
+        afterSequence = event.sequence;
+      }
+
+      const latestRun = requireRun(store, run.id);
+      if (latestRun.status !== currentRun.status) {
+        io.stdout(`status: ${currentRun.status} -> ${latestRun.status}\n`);
+        io.stdout(renderOperatorAction(latestRun));
+      }
+      currentRun = latestRun;
+
+      if (isTerminalStatus(currentRun.status)) {
+        return currentRun;
+      }
+
+      if (events.length === 0) {
+        const pollIntervalMs = dependencies.monitorPollIntervalMs ?? 250;
+        await Promise.race([sleep(pollIntervalMs), stopped]);
+      }
+    }
+
+    io.stdout(`monitor: detached from ${run.id}; durable run remains ${currentRun.status}\n`);
+    return currentRun;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
+function isTerminalStatus(status: RunRecord["status"]): boolean {
+  return status === "complete" || status === "cancelled";
+}
+
+function renderOperatorAction(run: RunRecord): string {
+  if (run.status === "waiting_approval") {
+    return [
+      `operator: agentloop approve ${run.id} --message "Approved"`,
+      `operator: agentloop reject ${run.id} --message "Rejected"`,
+      "",
+    ].join("\n");
+  }
+
+  if (
+    run.status === "externally_blocked" ||
+    run.status === "stuck" ||
+    run.status === "budget_exhausted" ||
+    run.status === "failed"
+  ) {
+    return `operator: agentloop resume ${run.id} --message "Operator context"\n`;
+  }
+
+  return "";
+}
+
 interface ExecuteSingleTurnInput {
   run: RunRecord;
   store: SqliteRunStore;
@@ -570,28 +688,27 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
 
     for await (const event of events) {
       const createdAt = clock.now().toISOString();
-      if (event.type === "thread.started") {
-        store.recordThreadStarted({
-          createdAt,
-          eventType: event.type,
-          itemId: null,
-          payloadJson: eventPayloadJson(event),
-          runId: run.id,
-          threadId: event.thread_id,
-          turnId,
-        });
-      } else {
-        store.appendEvent({
-          createdAt,
-          eventType: event.type,
-          itemId: eventItemId(event),
-          payloadJson: eventPayloadJson(event),
-          runId: run.id,
-          turnId,
-        });
-      }
+      const eventRecord =
+        event.type === "thread.started"
+          ? store.recordThreadStarted({
+              createdAt,
+              eventType: event.type,
+              itemId: null,
+              payloadJson: eventPayloadJson(event),
+              runId: run.id,
+              threadId: event.thread_id,
+              turnId,
+            })
+          : store.appendEvent({
+              createdAt,
+              eventType: event.type,
+              itemId: eventItemId(event),
+              payloadJson: eventPayloadJson(event),
+              runId: run.id,
+              turnId,
+            });
 
-      io.stdout(`event: ${event.type}\n`);
+      io.stdout(renderEventText(eventRecord));
       finalText = agentMessageText(event) ?? finalText;
 
       if (event.type === "turn.completed") {
@@ -910,8 +1027,9 @@ async function resumeCommand(
         now: clock.now().toISOString(),
         reason: "skill fingerprint changed",
       });
-      io.stdout(renderRun(waiting, store.listPendingApprovals(waiting.id)));
-      return 2;
+      const observed = await monitorOpenRun(waiting, store, dependencies, io);
+      io.stdout(renderRun(observed, store.listPendingApprovals(observed.id)));
+      return observed.status === "waiting_approval" ? 2 : EXIT_CODES.ok;
     }
 
     run = store.updateSkillFingerprint({
@@ -923,7 +1041,7 @@ async function resumeCommand(
 
   const turnKind = determineResumeTurnKind(store, run);
   run = transitionToContinuingForResume(store, run, clock.now().toISOString());
-  const completed = await executeRun({
+  const completed = await executeForegroundRun({
     approvalId: null,
     dependencies,
     firstTurnKind: turnKind,
@@ -1034,7 +1152,7 @@ async function approveCommand(
     now: clock.now().toISOString(),
     reason: `approval ${approval.id} approved`,
   });
-  const completed = await executeRun({
+  const completed = await executeForegroundRun({
     approvalId: approval.id,
     dependencies,
     firstTurnKind: "approval-response",
@@ -1563,58 +1681,316 @@ function renderEventJson(event: EventRecord): string {
 
 function renderEventText(event: EventRecord): string {
   const payload = parseJsonObject(event.payloadJson);
-  const prefix = `${event.sequence}\t${event.createdAt}`;
+  const prefix = eventLogPrefix(event);
   if (event.eventType === "thread.started") {
-    return `${prefix}\tharness: thread.started thread=${stringField(payload, "thread_id") ?? "unknown"}\n`;
+    return `${prefix} orchestrator · thread started (${stringField(payload, "thread_id") ?? "unknown"})\n`;
+  }
+
+  if (event.eventType === "turn.started") {
+    return `${prefix} orchestrator · coordinator turn started\n`;
   }
 
   if (event.eventType === "turn.completed") {
     const usage = objectField(payload, "usage");
-    return `${prefix}\tharness: turn.completed usage=${formatUsagePayload(usage)}\n`;
+    return `${prefix} orchestrator ✓ turn completed · ${formatUsagePayload(usage)}\n`;
   }
 
   if (event.eventType === "turn.failed" || event.eventType === "error") {
-    return `${prefix}\tharness: ${event.eventType} error=${errorText(payload)}\n`;
+    return `${prefix} orchestrator ✗ ${event.eventType} · ${compactText(errorText(payload), 800)}\n`;
   }
 
-  if (event.eventType === "item.completed") {
+  if (
+    event.eventType === "item.started" ||
+    event.eventType === "item.updated" ||
+    event.eventType === "item.completed"
+  ) {
     const item = objectField(payload, "item");
-    const itemType = stringField(item, "type") ?? "unknown";
-    const label = itemTypeLabel(itemType);
-    return `${prefix}\tmodel: ${label} item=${event.itemId ?? "none"} ${itemText(item)}\n`;
+    return renderItemEvent(prefix, event.eventType, event.itemId, item);
   }
 
-  return `${prefix}\tharness: ${event.eventType}\n`;
+  return `${prefix} orchestrator · ${event.eventType}\n`;
 }
 
-function itemTypeLabel(itemType: string): string {
-  if (itemType === "agent_message") {
-    return "agent_message";
+function renderItemEvent(
+  prefix: string,
+  eventType: "item.started" | "item.updated" | "item.completed",
+  itemId: string | null,
+  item: Record<string, unknown> | null,
+): string {
+  const itemType = stringField(item, "type") ?? "unknown";
+  switch (itemType) {
+    case "agent_message":
+      return renderAgentMessage(prefix, item);
+    case "reasoning":
+      return eventType === "item.completed"
+        ? `${prefix} coordinator decision › ${compactText(stringField(item, "text") ?? "", 1_200)}\n`
+        : "";
+    case "command_execution":
+      return renderCommandEvent(prefix, eventType, item);
+    case "collab_tool_call":
+      return renderNativeCollaborationEvent(prefix, eventType, item);
+    case "mcp_tool_call":
+      return renderMcpEvent(prefix, eventType, itemId, item);
+    case "todo_list":
+      return renderTodoEvent(prefix, eventType, item);
+    case "file_change":
+      return renderFileChangeEvent(prefix, eventType, item);
+    case "web_search":
+      return eventType === "item.started"
+        ? `${prefix} coordinator › searching web · ${compactText(stringField(item, "query") ?? "", 500)}\n`
+        : "";
+    case "error":
+      return `${prefix} coordinator ✗ ${compactText(stringField(item, "message") ?? "unknown item error", 800)}\n`;
+    default:
+      return eventType === "item.completed"
+        ? `${prefix} coordinator · ${itemType} completed (${itemId ?? "unknown"})\n`
+        : "";
   }
-
-  if (itemType.includes("command")) {
-    return "command_execution";
-  }
-
-  if (itemType.includes("mcp")) {
-    return "mcp_call";
-  }
-
-  if (itemType.includes("file")) {
-    return "file_change";
-  }
-
-  return itemType;
 }
 
-function itemText(item: Record<string, unknown> | null): string {
-  if (item === null) {
+function renderAgentMessage(prefix: string, item: Record<string, unknown> | null): string {
+  const text = stringField(item, "text") ?? "";
+  const envelope = parseJsonObject(text);
+  const status = stringField(envelope, "status");
+  const summary = stringField(envelope, "summary");
+  if (status !== null && summary !== null) {
+    return `${prefix} update [${status}] › ${compactText(summary, 1_200)}${renderAgentsRoster(envelope)}\n`;
+  }
+
+  return `${prefix} coordinator › ${compactText(text, 1_200)}\n`;
+}
+
+function renderAgentsRoster(envelope: Record<string, unknown> | null): string {
+  const agents = objectField(envelope, "agents");
+  const coordinator = objectField(agents, "coordinator");
+  const subagents = arrayField(agents, "subagents").map(asRecord).filter(isPresent);
+  if (coordinator === null && subagents.length === 0) {
     return "";
   }
 
-  const text =
-    stringField(item, "text") ?? stringField(item, "message") ?? stringField(item, "name");
-  return text === null ? "" : `text=${text}`;
+  const running = subagents.filter((agent) => stringField(agent, "status") === "running").length;
+  const waiting = subagents.filter((agent) => stringField(agent, "status") === "waiting").length;
+  const blocked = subagents.filter((agent) => stringField(agent, "status") === "blocked").length;
+  const lines = [
+    `  agents: ${subagents.length} active · ${running} running · ${waiting} waiting · ${blocked} blocked`,
+  ];
+
+  if (coordinator !== null) {
+    lines.push(
+      `  coordinator [${stringField(coordinator, "status") ?? "unknown"}] — ${compactText(stringField(coordinator, "task") ?? "task not reported", 500)}`,
+    );
+  }
+
+  for (const agent of subagents) {
+    const name = stringField(agent, "name") ?? "unnamed";
+    const role = stringField(agent, "role") ?? "unknown-role";
+    const agentStatus = stringField(agent, "status") ?? "unknown";
+    const task = compactText(stringField(agent, "task") ?? "task not reported", 500);
+    lines.push(`  ${name} [${role}, ${agentStatus}] — ${task}`);
+  }
+
+  return `\n${lines.join("\n")}`;
+}
+
+function renderCommandEvent(
+  prefix: string,
+  eventType: "item.started" | "item.updated" | "item.completed",
+  item: Record<string, unknown> | null,
+): string {
+  if (eventType !== "item.completed") {
+    return "";
+  }
+
+  const command = stringField(item, "command") ?? "unknown command";
+  const intent = describeCommand(command);
+  const status = stringField(item, "status") ?? "completed";
+  const exitCode = numberFieldOrNull(item, "exit_code");
+  const output = stringField(item, "aggregated_output") ?? "";
+  const failed = status === "failed" || (exitCode !== null && exitCode !== 0);
+  if (!failed) {
+    return "";
+  }
+
+  const failureOutput = output === "" ? "no error output" : compactText(output, 500);
+  return `${prefix} warning › ${intent} failed (exit ${exitCode ?? "unknown"}) · ${failureOutput}\n`;
+}
+
+function describeCommand(command: string): string {
+  const normalized = command.toLowerCase();
+  if (normalized.includes("gh pr merge")) {
+    return "merging a pull request and verifying closure";
+  }
+  if (normalized.includes("reviewthreads")) {
+    return "checking unresolved pull-request review threads";
+  }
+  if (normalized.includes("gh issue list") && normalized.includes("gh pr list")) {
+    return "refreshing open issues and pull requests";
+  }
+  if (normalized.includes("git fetch") && normalized.includes("git worktree")) {
+    return "reconciling GitHub, branches, and worktrees";
+  }
+  if (normalized.includes("git status") && normalized.includes("git worktree")) {
+    return "checking repository and worktree ownership state";
+  }
+  if (normalized.includes("gh pr view")) {
+    return "inspecting pull-request readiness and evidence";
+  }
+  if (normalized.includes("gh issue view")) {
+    return "inspecting issue state and closure evidence";
+  }
+  if (normalized.includes("status.md")) {
+    return "reading or reconciling the shared team status";
+  }
+  if (normalized.includes("/.agents/skills/") || normalized.includes(".agents/skills/")) {
+    return "loading installed workflow instructions";
+  }
+  if (normalized.includes("bun run verify") || normalized.includes("make verify")) {
+    return "running the canonical verification gate";
+  }
+  if (normalized.includes("git status")) {
+    return "checking repository state";
+  }
+  return "running an implementation or inspection command";
+}
+
+function renderMcpEvent(
+  prefix: string,
+  eventType: "item.started" | "item.updated" | "item.completed",
+  itemId: string | null,
+  item: Record<string, unknown> | null,
+): string {
+  if (eventType === "item.updated") {
+    return "";
+  }
+
+  const server = stringField(item, "server") ?? "unknown";
+  const tool = stringField(item, "tool") ?? "unknown";
+  const args = objectField(item, "arguments");
+  const status = stringField(item, "status") ?? "unknown";
+  const isCollaboration = server.toLowerCase().includes("collaboration");
+  if (isCollaboration) {
+    return renderCollaborationEvent(prefix, eventType, itemId, tool, status, args, item);
+  }
+
+  const error = stringField(objectField(item, "error"), "message");
+  if (eventType !== "item.completed" || status !== "failed") {
+    return "";
+  }
+  return `${prefix} warning › tool ${server}.${tool} failed (${itemId ?? "unknown"})${error === null ? "" : ` · ${compactText(error, 500)}`}\n`;
+}
+
+function renderNativeCollaborationEvent(
+  prefix: string,
+  eventType: "item.started" | "item.updated" | "item.completed",
+  item: Record<string, unknown> | null,
+): string {
+  if (eventType !== "item.completed") {
+    return "";
+  }
+
+  const tool = stringField(item, "tool") ?? "unknown";
+  const status = stringField(item, "status") ?? "unknown";
+  const states = objectField(item, "agents_states");
+  if (tool === "wait" && (states === null || Object.keys(states).length === 0)) {
+    return "";
+  }
+  return status === "failed" ? `${prefix} warning › subagent coordination ${tool} failed\n` : "";
+}
+
+function renderCollaborationEvent(
+  prefix: string,
+  eventType: "item.started" | "item.completed",
+  itemId: string | null,
+  tool: string,
+  status: string,
+  args: Record<string, unknown> | null,
+  item: Record<string, unknown> | null,
+): string {
+  const target = stringField(args, "target") ?? stringField(args, "task_name") ?? "unnamed";
+  const message = stringField(args, "message");
+  const phase = eventType === "item.started" ? "requested" : status;
+  let action: string;
+  switch (tool) {
+    case "spawn_agent":
+      action = `${phase === "requested" ? "starting" : "started"} subagent ${target}`;
+      break;
+    case "send_message":
+      action = `${phase === "requested" ? "sending" : "sent"} coordinator message to ${target}`;
+      break;
+    case "followup_task":
+      action = `${phase === "requested" ? "assigning" : "assigned"} follow-up work to ${target}`;
+      break;
+    case "wait_agent":
+      action = phase === "requested" ? "waiting for active subagents" : "received subagent updates";
+      break;
+    case "list_agents":
+      action =
+        phase === "requested"
+          ? "refreshing active subagent status"
+          : "refreshed active subagent status";
+      break;
+    case "interrupt_agent":
+      action = `${phase === "requested" ? "interrupting" : "interrupted"} subagent ${target}`;
+      break;
+    default:
+      action = `${phase} collaboration.${tool} for ${target}`;
+  }
+
+  const marker = eventType === "item.started" ? "›" : status === "failed" ? "✗" : "✓";
+  const objective = message === null ? "" : `\n  objective: ${compactText(message, 900)}`;
+  const result = collaborationResult(item);
+  return `${prefix} orchestrator ${marker} ${action} (${itemId ?? "unknown"})${objective}${result}\n`;
+}
+
+function collaborationResult(item: Record<string, unknown> | null): string {
+  const result = objectField(item, "result");
+  const structured = result?.structured_content;
+  if (structured === undefined || structured === null) {
+    const error = stringField(objectField(item, "error"), "message");
+    return error === null ? "" : `\n  result: ${compactText(error, 900)}`;
+  }
+
+  return `\n  result: ${compactText(JSON.stringify(structured), 900)}`;
+}
+
+function renderTodoEvent(
+  prefix: string,
+  eventType: "item.started" | "item.updated" | "item.completed",
+  item: Record<string, unknown> | null,
+): string {
+  if (eventType === "item.completed") {
+    return "";
+  }
+
+  const todos = arrayField(item, "items")
+    .map((todo) => {
+      const entry = asRecord(todo);
+      const text = stringField(entry, "text") ?? "unnamed step";
+      return `${booleanField(entry, "completed") ? "[x]" : "[ ]"} ${text}`;
+    })
+    .join(" | ");
+  return `${prefix} orchestrator plan › ${compactText(todos, 1_200)}\n`;
+}
+
+function renderFileChangeEvent(
+  prefix: string,
+  eventType: "item.started" | "item.updated" | "item.completed",
+  item: Record<string, unknown> | null,
+): string {
+  if (eventType !== "item.completed") {
+    return "";
+  }
+
+  const changes = arrayField(item, "changes")
+    .map((change) => {
+      const entry = asRecord(change);
+      return `${stringField(entry, "kind") ?? "update"} ${stringField(entry, "path") ?? "unknown"}`;
+    })
+    .join(", ");
+  const status = stringField(item, "status") ?? "completed";
+  return status === "failed"
+    ? `${prefix} warning › file changes failed · ${compactText(changes, 800)}\n`
+    : "";
 }
 
 function errorText(payload: Record<string, unknown> | null): string {
@@ -1629,6 +2005,16 @@ function formatUsagePayload(usage: Record<string, unknown> | null): string {
   }
 
   return `input=${numberField(usage, "input_tokens") ?? 0} cached=${numberField(usage, "cached_input_tokens") ?? 0} output=${numberField(usage, "output_tokens") ?? 0} reasoning=${numberField(usage, "reasoning_output_tokens") ?? 0}`;
+}
+
+function eventLogPrefix(event: EventRecord): string {
+  const time = event.createdAt.match(/T(\d{2}:\d{2}:\d{2})/)?.[1] ?? event.createdAt;
+  return `[#${event.sequence} ${time}Z]`;
+}
+
+function compactText(value: string, maxLength: number): string {
+  const compacted = value.replace(/\s+/g, " ").trim();
+  return compacted.length <= maxLength ? compacted : `${compacted.slice(0, maxLength - 1)}…`;
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {
@@ -1652,6 +2038,21 @@ function objectField(
     : null;
 }
 
+function arrayField(value: Record<string, unknown> | null, field: string): unknown[] {
+  const candidate = value?.[field];
+  return Array.isArray(candidate) ? candidate : [];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function isPresent<T>(value: T | null): value is T {
+  return value !== null;
+}
+
 function stringField(value: Record<string, unknown> | null, field: string): string | null {
   const candidate = value?.[field];
   return typeof candidate === "string" ? candidate : null;
@@ -1660,6 +2061,14 @@ function stringField(value: Record<string, unknown> | null, field: string): stri
 function numberField(value: Record<string, unknown>, field: string): number | null {
   const candidate = value[field];
   return typeof candidate === "number" ? candidate : null;
+}
+
+function numberFieldOrNull(value: Record<string, unknown> | null, field: string): number | null {
+  return value === null ? null : numberField(value, field);
+}
+
+function booleanField(value: Record<string, unknown> | null, field: string): boolean {
+  return value?.[field] === true;
 }
 
 if (import.meta.main) {

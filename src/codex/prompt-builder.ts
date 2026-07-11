@@ -67,7 +67,8 @@ Use the installed skills. Do not reconstruct role prompts in this harness.
 Run non-interactively; if a durable human approval is required, return a waiting_approval control envelope.
 Production deploys, releases, secret changes, billing changes, out-of-scope work, and skill fingerprint changes require waiting_approval.
 If merge policy is human-merge, return waiting_approval immediately before the first merge attempt.
-Return only the required final control envelope. Include closure evidence when complete.`;
+Keep the human operator informed during the turn with brief progress control-envelope updates before each meaningful phase and after each material decision. Every update must include an accurate agents roster: the coordinator's current task/status and every active subagent's canonical name, role, current task, and running/waiting/blocked status. Include only currently active subagents; report completed or failed agents in the summary and remove them from the active roster. Report issue and PR selection, dependency and merge decisions, subagent assignment and completion handoffs, verification results, and significant side effects. Do not narrate routine read-only commands and do not expose private chain-of-thought; summarize decisions and concrete evidence.
+At the end of the turn, the final agent message must contain only the required control envelope. Include closure evidence when complete.`;
 }
 
 function totalNonCachedTokens(run: RunRecord): number {

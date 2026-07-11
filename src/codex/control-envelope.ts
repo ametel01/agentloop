@@ -1,6 +1,18 @@
 export interface ControlEnvelope {
   status: "complete" | "continue" | "waiting_approval" | "externally_blocked";
   summary: string;
+  agents: {
+    coordinator: {
+      status: "working" | "waiting" | "blocked" | "complete";
+      task: string;
+    };
+    subagents: Array<{
+      name: string;
+      role: string;
+      status: "running" | "waiting" | "blocked";
+      task: string;
+    }>;
+  };
   closureGatePassed: boolean;
   evidence: {
     statusPath: string;
@@ -29,13 +41,49 @@ export interface ControlEnvelope {
 export const CONTROL_ENVELOPE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "summary", "closureGatePassed", "evidence", "approval", "blocker"],
+  required: ["status", "summary", "agents", "closureGatePassed", "evidence", "approval", "blocker"],
   properties: {
     status: {
       type: "string",
       enum: ["complete", "continue", "waiting_approval", "externally_blocked"],
     },
     summary: { type: "string" },
+    agents: {
+      type: "object",
+      additionalProperties: false,
+      required: ["coordinator", "subagents"],
+      properties: {
+        coordinator: {
+          type: "object",
+          additionalProperties: false,
+          required: ["status", "task"],
+          properties: {
+            status: {
+              type: "string",
+              enum: ["working", "waiting", "blocked", "complete"],
+            },
+            task: { type: "string" },
+          },
+        },
+        subagents: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "role", "status", "task"],
+            properties: {
+              name: { type: "string" },
+              role: { type: "string" },
+              status: {
+                type: "string",
+                enum: ["running", "waiting", "blocked"],
+              },
+              task: { type: "string" },
+            },
+          },
+        },
+      },
+    },
     closureGatePassed: { type: "boolean" },
     evidence: {
       type: "object",
@@ -123,6 +171,7 @@ function assertEnvelope(value: unknown): asserts value is ControlEnvelope {
   }
 
   assertExactKeys(value, [
+    "agents",
     "approval",
     "blocker",
     "closureGatePassed",
@@ -132,10 +181,39 @@ function assertEnvelope(value: unknown): asserts value is ControlEnvelope {
   ]);
   assertOneOf(value.status, ["complete", "continue", "waiting_approval", "externally_blocked"]);
   assertString(value.summary, "summary");
+  assertAgents(value.agents);
   assertBoolean(value.closureGatePassed, "closureGatePassed");
   assertEvidence(value.evidence);
   assertApproval(value.approval);
   assertBlocker(value.blocker);
+}
+
+function assertAgents(value: unknown): asserts value is ControlEnvelope["agents"] {
+  if (!isRecord(value)) {
+    throw new Error("agents must be an object");
+  }
+
+  assertExactKeys(value, ["coordinator", "subagents"]);
+  if (!isRecord(value.coordinator)) {
+    throw new Error("agents.coordinator must be an object");
+  }
+  assertExactKeys(value.coordinator, ["status", "task"]);
+  assertOneOf(value.coordinator.status, ["working", "waiting", "blocked", "complete"]);
+  assertString(value.coordinator.task, "agents.coordinator.task");
+
+  if (!Array.isArray(value.subagents)) {
+    throw new Error("agents.subagents must be an array");
+  }
+  for (const [index, subagent] of value.subagents.entries()) {
+    if (!isRecord(subagent)) {
+      throw new Error(`agents.subagents[${index}] must be an object`);
+    }
+    assertExactKeys(subagent, ["name", "role", "status", "task"]);
+    assertString(subagent.name, `agents.subagents[${index}].name`);
+    assertString(subagent.role, `agents.subagents[${index}].role`);
+    assertOneOf(subagent.status, ["running", "waiting", "blocked"]);
+    assertString(subagent.task, `agents.subagents[${index}].task`);
+  }
 }
 
 function assertEvidence(value: unknown): asserts value is ControlEnvelope["evidence"] {

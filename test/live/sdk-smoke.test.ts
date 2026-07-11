@@ -24,7 +24,7 @@ liveTest("starts and resumes a harmless Codex SDK thread", async () => {
       workingDirectory: repoPath,
     } satisfies ThreadOptions;
     const prompt = `Return this control envelope with no other text:
-{"approval":null,"blocker":null,"closureGatePassed":true,"evidence":{"issueUrls":[],"prUrls":[],"reviewUrls":[],"statusPath":"STATUS.md"},"status":"complete","summary":"Live schema accepted."}`;
+{"agents":{"coordinator":{"status":"complete","task":"Finish the harmless SDK smoke test."},"subagents":[]},"approval":null,"blocker":null,"closureGatePassed":true,"evidence":{"issueUrls":[],"prUrls":[],"reviewUrls":[],"statusPath":"STATUS.md"},"status":"complete","summary":"Live schema accepted."}`;
 
     const codex = new Codex();
     const firstThread = codex.startThread(options);
