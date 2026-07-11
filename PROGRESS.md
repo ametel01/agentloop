@@ -21,7 +21,7 @@
 - [x] Step 5: Split compact checkpoints from final control messages.
 - [x] Step 6: Bound hot context and enforce closure-first review policy.
 - [x] Step 7: Add strict exact-head evidence reuse.
-- [ ] Step 8: Expose outcome efficiency, document operations, and run final gates.
+- [x] Step 8: Expose outcome efficiency, document operations, and run final gates.
 
 ## Baseline
 
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 7 complete and validated.
-- Next step: Step 8 outcome efficiency, documentation, and final gates.
+- Status: Complete.
+- Next step: none; bounded-supervisor implementation plan is complete.
 
 ## Update Rules
 
@@ -76,6 +76,12 @@
 - 2026-07-11: Step 7 tests covered exact key hits, independent invalidation by gate version, relevant input digest, environment fingerprint, and head SHA, stable-patch fallback when head SHA is absent, missing-ref cache misses, secret redaction in summaries/signatures, SQLite lookup/pruning, strict checkpoint schema parsing, and continuation-prompt reuse guidance.
 - 2026-07-11: Step 7 validation passed: targeted `bun run typecheck` and `bun test test/unit/evidence-cache.test.ts test/unit/sqlite-run-store.test.ts test/unit/codex-contracts.test.ts test/unit/foreground-run.test.ts --timeout 10000`, then full `bun run format && bun run verify`. Test summary: 94 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 7 Agentloop commit subject: `feat: reuse strictly equivalent execution evidence`.
+- 2026-07-11: Step 8 exposed status efficiency metrics for usage completeness, checkpoint age, outcomes by type, latest review cycle, total non-cached tokens, elapsed time, and token/time/review-cycle ratios per material outcome.
+- 2026-07-11: Step 8 documented bounded tranche defaults, state transitions, checkpoint/final protocol, outcome progress, hot-ledger shards, review caps, evidence-cache keys/invalidation, recovery, redaction, and rollback in README and docs.
+- 2026-07-11: Step 8 final validation passed: targeted `bun run typecheck` and `bun test test/unit/foreground-run.test.ts test/unit/cli-blackbox.test.ts --timeout 10000`; full `bun run format && bun run verify`; `bun audit` with no vulnerabilities; installed-skill `jq empty`; Agentloop and skills `git diff --check`; Agentloop artifact scan for local SQLite/WAL/SHM/log/coverage files; changelog sanity check for one `## [Unreleased]` and non-empty headings.
+- 2026-07-11: Step 8 final test summary: 94 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 8 repository status before commit: Agentloop `main...origin/main` ahead by 8 with only Step 8 docs/status files modified; installed skills `main...origin/main` ahead by 2 with only pre-existing unstaged docs edits in `agent-team-status-protocol/SKILL.md`, `codex-dev-team-goal/SKILL.md`, and `team-coordinator/SKILL.md`.
+- 2026-07-11: Step 8 Agentloop commit subject: `docs: finalize bounded supervisor operations`.
 
 ---
 

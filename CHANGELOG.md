@@ -26,6 +26,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Expose outcome efficiency metrics in status output, including usage completeness, checkpoint age, outcomes by type, and token/time/review-cycle ratios.
 - Normalize owned checkpoint status-shard paths so absolute paths and parent traversal are not persisted.
 - Split live control messages into compact checkpoints and strict final messages with explicit discriminators.
 - Track material Git/GitHub outcomes instead of activity fingerprints for no-progress decisions.

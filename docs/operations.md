@@ -129,6 +129,16 @@ bun dist/cli.js status RUN_ID
 bun dist/cli.js events RUN_ID
 ```
 
+Status output includes:
+
+- latest useful outcome time and outcome counts by type
+- latest checkpoint and checkpoint age
+- whether every recorded turn has complete official usage
+- recent exact evidence-cache references
+- tokens, elapsed time, and review cycles per material outcome, or `unavailable` when there is no denominator
+
+Use these fields to decide whether the run is delivering material outcomes or only consuming turns.
+
 ## Recovery Procedure
 
 1. Run `status RUN_ID --json` and inspect the harness state, turn summaries, lease metadata, last error, latest blocker, and pending approvals.
@@ -141,6 +151,13 @@ bun dist/cli.js resume RUN_ID --message "Operator recovery context"
 ```
 
 If a skill fingerprint changed, approve or reject the durable skill-change checkpoint instead of forcing silent continuation.
+
+For bounded stops:
+
+- `continuing` after `tranche_elapsed`: resume normally; the previous turn ended at the cooperative boundary.
+- `failed` with `event_stalled` or `hard_deadline`: inspect events and live repo state, then resume when the stream can safely continue.
+- `review_cycle_exhausted`: inspect the PR, head, findings, and configured cap; resume only with an operator decision about another cycle, handoff, or terminal blocker.
+- `stuck`: inspect outcomes and blockers; resume only if there is a new material path forward.
 
 ## Budget Tuning
 
@@ -155,12 +172,29 @@ Defaults:
 - 25 outer turns
 - 5,000,000 non-cached tokens
 - 8 hours wall duration
+- 10 minute cooperative Codex tranche
+- 11 minute hard turn deadline
+- 4 minute event-stall deadline
 - 120 second lease TTL
 - 30 second lease heartbeat
 - 2 unchanged-progress continuation turns
 - 2 consecutive failed outer turns
 
 Token budgets count input, output, and reasoning tokens. Cached input tokens are tracked but excluded from the hard token ceiling.
+
+## Hot State And Evidence Cache
+
+`STATUS.md` should remain a compact hot index. When Agentloop sees more than 200 lines or 64 KiB, it instructs the coordinator to compact before assigning new work. Per-stream detail belongs in repository-relative `STATUS.d/<issue-or-pr>.md` shards; absolute paths and `..` traversal are discarded from checkpoints.
+
+Reusable evidence is safe only under exact equivalence. A checkpoint may cache compact gate or blocker evidence when it declares:
+
+- head SHA or stable patch ID
+- gate name and gate version
+- relevant-input digest
+- environment fingerprint
+- result summary and optional reusable failure signature
+
+If any key is absent or changed, rerun the gate or blocker check. Product-code changes should change the relevant-input digest. Docs or tracker-only changes may reuse unaffected evidence only when the declared digest excludes them.
 
 ## Approvals
 

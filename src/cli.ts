@@ -1858,6 +1858,7 @@ interface RunStatusDocument extends RunRecord {
   turns: TurnRecord[];
   checkpoints: CheckpointRecord[];
   evidenceCache: EvidenceCacheRecord[];
+  efficiency: RunEfficiency;
   outcomes: OutcomeRecord[];
   lease: LeaseRecord | null;
   heartbeatAgeMs: number | null;
@@ -1865,20 +1866,36 @@ interface RunStatusDocument extends RunRecord {
   latestCheckpoint: CheckpointRecord | null;
 }
 
+interface RunEfficiency {
+  checkpointAgeMs: number | null;
+  elapsedMs: number;
+  elapsedMsPerOutcome: number | null;
+  latestReviewCycle: { currentCycle: number; maxCycles: number; prUrl: string } | null;
+  outcomesByType: Record<string, number>;
+  reviewCyclesPerOutcome: number | null;
+  tokensPerOutcome: number | null;
+  totalNonCachedTokens: number;
+  usageComplete: boolean;
+}
+
 function buildRunStatus(store: SqliteRunStore, run: RunRecord, clock: Clock): RunStatusDocument {
   const lease = store.getLeaseForRun(run.id);
+  const checkpoints = store.listCheckpoints(run.id);
+  const outcomes = store.listOutcomes(run.id);
+  const turns = store.listTurns(run.id);
   return {
     ...run,
+    checkpoints,
+    efficiency: buildEfficiency(run, turns, checkpoints, outcomes, clock),
+    evidenceCache: store.listEvidenceCache(run.repoKey, 10),
     heartbeatAgeMs:
       lease === null ? null : Math.max(0, clock.now().getTime() - Date.parse(lease.heartbeatAt)),
-    checkpoints: store.listCheckpoints(run.id),
-    evidenceCache: store.listEvidenceCache(run.repoKey, 10),
-    latestBlocker: latestBlocker(store.listTurns(run.id)),
-    latestCheckpoint: store.getLatestCheckpoint(run.id),
+    latestBlocker: latestBlocker(turns),
+    latestCheckpoint: checkpoints.at(-1) ?? null,
     lease,
-    outcomes: store.listOutcomes(run.id),
+    outcomes,
     pendingApprovals: store.listPendingApprovals(run.id),
-    turns: store.listTurns(run.id),
+    turns,
   };
 }
 
@@ -1894,6 +1911,19 @@ function renderRunStatus(status: RunStatusDocument): string {
     `usage.cachedInputTokens: ${status.usage.cachedInputTokens}`,
     `usage.outputTokens: ${status.usage.outputTokens}`,
     `usage.reasoningTokens: ${status.usage.reasoningTokens}`,
+    `usage.complete: ${status.efficiency.usageComplete}`,
+    `efficiency.elapsedMs: ${status.efficiency.elapsedMs}`,
+    `efficiency.totalNonCachedTokens: ${status.efficiency.totalNonCachedTokens}`,
+    `efficiency.tokensPerOutcome: ${formatRatio(status.efficiency.tokensPerOutcome)}`,
+    `efficiency.elapsedMsPerOutcome: ${formatRatio(status.efficiency.elapsedMsPerOutcome)}`,
+    `efficiency.reviewCyclesPerOutcome: ${formatRatio(status.efficiency.reviewCyclesPerOutcome)}`,
+    `checkpoint.ageMs: ${status.efficiency.checkpointAgeMs ?? "none"}`,
+    `reviewCycle.latest: ${
+      status.efficiency.latestReviewCycle === null
+        ? "none"
+        : `${status.efficiency.latestReviewCycle.currentCycle}/${status.efficiency.latestReviewCycle.maxCycles} ${status.efficiency.latestReviewCycle.prUrl}`
+    }`,
+    `outcomesByType: ${JSON.stringify(status.efficiency.outcomesByType)}`,
     `stateFingerprint: ${status.stateFingerprint ?? "none"}`,
     `lastUsefulOutcomeAt: ${status.lastUsefulOutcomeAt ?? "none"}`,
     `outcomeCount: ${status.outcomes.length}`,
@@ -1946,6 +1976,68 @@ function renderRunStatus(status: RunStatusDocument): string {
 
   lines.push("");
   return lines.join("\n");
+}
+
+function buildEfficiency(
+  run: RunRecord,
+  turns: readonly TurnRecord[],
+  checkpoints: readonly CheckpointRecord[],
+  outcomes: readonly OutcomeRecord[],
+  clock: Clock,
+): RunEfficiency {
+  const outcomeCount = outcomes.length;
+  const totalNonCachedTokens =
+    run.usage.inputTokens + run.usage.outputTokens + run.usage.reasoningTokens;
+  const elapsedMs = Math.max(0, clock.now().getTime() - Date.parse(run.startedAt ?? run.createdAt));
+  const latestCheckpoint = checkpoints.at(-1) ?? null;
+  const latestReviewCycle = latestReviewCycleFromCheckpoints(checkpoints);
+  const reviewCycles = latestReviewCycle?.currentCycle ?? 0;
+
+  return {
+    checkpointAgeMs:
+      latestCheckpoint === null
+        ? null
+        : Math.max(0, clock.now().getTime() - Date.parse(latestCheckpoint.createdAt)),
+    elapsedMs,
+    elapsedMsPerOutcome: outcomeCount === 0 ? null : elapsedMs / outcomeCount,
+    latestReviewCycle,
+    outcomesByType: outcomesByType(outcomes),
+    reviewCyclesPerOutcome: outcomeCount === 0 ? null : reviewCycles / outcomeCount,
+    tokensPerOutcome: outcomeCount === 0 ? null : totalNonCachedTokens / outcomeCount,
+    totalNonCachedTokens,
+    usageComplete: turns.every((turn) => turn.usageComplete),
+  };
+}
+
+function latestReviewCycleFromCheckpoints(
+  checkpoints: readonly CheckpointRecord[],
+): RunEfficiency["latestReviewCycle"] {
+  for (const checkpoint of [...checkpoints].reverse()) {
+    const payload = asRecord(checkpoint.payload);
+    const reviewCycle = asRecord(payload?.reviewCycle);
+    if (reviewCycle === null) {
+      continue;
+    }
+    const currentCycle = numberField(reviewCycle, "currentCycle");
+    const maxCycles = numberField(reviewCycle, "maxCycles");
+    const prUrl = stringField(reviewCycle, "prUrl");
+    if (currentCycle !== null && maxCycles !== null && prUrl !== null) {
+      return { currentCycle, maxCycles, prUrl };
+    }
+  }
+  return null;
+}
+
+function outcomesByType(outcomes: readonly OutcomeRecord[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const outcome of outcomes) {
+    counts[outcome.type] = (counts[outcome.type] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function formatRatio(value: number | null): string {
+  return value === null ? "unavailable" : Number(value.toFixed(2)).toString();
 }
 
 function renderRun(run: RunRecord, pendingApprovals: readonly ApprovalRequest[] = []): string {

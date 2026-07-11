@@ -1262,6 +1262,12 @@ describe("foreground run", () => {
       stderr: () => {},
     });
     const status = JSON.parse(statusJson.join("")) as {
+      efficiency: {
+        checkpointAgeMs: number | null;
+        outcomesByType: Record<string, number>;
+        tokensPerOutcome: number | null;
+        usageComplete: boolean;
+      };
       heartbeatAgeMs: number | null;
       latestCheckpoint: { status: string; usageComplete: boolean } | null;
       latestBlocker: unknown;
@@ -1279,6 +1285,10 @@ describe("foreground run", () => {
     expect(status.turns[0]?.usageComplete).toBe(true);
     expect(status.latestCheckpoint?.status).toBe("completed");
     expect(status.latestCheckpoint?.usageComplete).toBe(true);
+    expect(status.efficiency.usageComplete).toBe(true);
+    expect(status.efficiency.checkpointAgeMs).toBeNumber();
+    expect(status.efficiency.tokensPerOutcome).toBeNull();
+    expect(status.efficiency.outcomesByType).toEqual({});
     expect(status.lease).toBeNull();
     expect(status.heartbeatAgeMs).toBeNull();
     expect(status.latestBlocker).toBeNull();
@@ -1290,6 +1300,9 @@ describe("foreground run", () => {
     });
     expect(statusText.join("")).toContain("harness.status: complete");
     expect(statusText.join("")).toContain("checkpoint.latest: 1 completed usageComplete=true");
+    expect(statusText.join("")).toContain("usage.complete: true");
+    expect(statusText.join("")).toContain("efficiency.tokensPerOutcome: unavailable");
+    expect(statusText.join("")).toContain("checkpoint.ageMs:");
     expect(statusText.join("")).toContain("turn.usageComplete: true");
     expect(statusText.join("")).toContain("turn.usage: input=10");
   });

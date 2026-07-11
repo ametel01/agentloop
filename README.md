@@ -90,6 +90,8 @@ bun src/cli.ts run --repo /path/to/repo --goal "Close issues #10 through #12" --
 
 Foreground mode creates the durable run row, acquires the repository lease, starts a Codex coordinator turn, streams full redacted event details, and stores the Codex thread ID when available. In an interactive terminal, a run that pauses for approval, an external blocker, exhaustion, or no progress keeps the foreground monitor attached. The monitor shows events produced by another resume or approval process and stays open until the run completes, is cancelled, or the operator presses Ctrl-C to detach. Non-interactive callers return when execution pauses so scripts do not hang.
 
+Each Codex turn is supervised as a bounded tranche. Defaults are a 10 minute cooperative tranche, an 11 minute hard deadline, and a 4 minute event-stall deadline. Cooperative tranche expiry continues the same run in a later turn; hard deadlines, repeated stalls, SDK failures, exhausted budgets, no progress, review-cycle caps, and operator cancellation are recorded as distinct durable outcomes.
+
 When approval is required, the attached monitor prints the exact `approve` and `reject` commands to run from another terminal. A recoverable execution error is also persisted and keeps an interactive monitor attached with the exact `resume` command. Non-interactive callers, or an operator who detaches while the run is still failed, receive the nonzero execution result.
 
 The default text event stream is a compact human view. Every coordinator update shows the number of active, running, waiting, and blocked subagents, followed by each active agent's canonical name, role, current task, and status. Routine successful commands, file-change events, and empty collaboration waits are hidden; decisions, command failures, approvals, blockers, and turn results remain visible. Raw command and SDK payload replay remains available with `events RUN_ID --json`.
@@ -131,7 +133,9 @@ bun src/cli.ts events RUN_ID --json
 bun src/cli.ts events RUN_ID --follow
 ```
 
-Status reports harness state, usage totals, turn summaries, pending approvals, lease metadata, heartbeat age, no-progress count, latest blocker, and last error. JSON status is stable machine-readable output. Event JSON is newline-delimited JSON in persisted sequence order.
+Status reports harness state, usage totals, usage completeness, checkpoint age, outcome counts by type, recent exact evidence cache entries, token/time/review-cycle ratios per outcome, turn summaries, pending approvals, lease metadata, heartbeat age, no-progress count, latest blocker, and last error. Ratios render as `unavailable` when no outcome or complete usage denominator exists. JSON status is stable machine-readable output. Event JSON is newline-delimited JSON in persisted sequence order.
+
+Control messages are split into compact `checkpoint` messages and terminal `final` messages. Checkpoints carry changed agents, material outcomes, blocker or approval changes, review-cycle state, optional owned `STATUS.d/...` shard paths, and reusable gate/blocker evidence. Final messages alone carry complete closure evidence.
 
 ## Resume And Recovery
 
@@ -143,6 +147,10 @@ bun src/cli.ts resume RUN_ID --message "Operator context"
 Recovery is at least once at the outer Codex turn boundary. If a process dies after side effects but before the final envelope is persisted, resume uses a recovery prompt requiring live reconciliation of `STATUS.md`, GitHub issues/PRs, branches, and worktrees before new actions.
 
 If required skill fingerprints changed, resume moves the run to `waiting_approval` unless `--accept-skill-change` is supplied.
+
+Agentloop does not parse the prose inside `STATUS.md`. If `STATUS.md` exceeds 200 lines or 64 KiB, the next prompt instructs the coordinator to compact it into a short hot index and move per-stream detail under repository-relative `STATUS.d/<issue-or-pr>.md` shards. Absolute shard paths and `..` traversal are discarded from checkpoints.
+
+Exact-head evidence reuse is local and conservative. A cache hit is available only when repository key, head SHA or stable patch ID, gate name/version, relevant-input digest, and environment fingerprint all match. Product-code, input, environment, or gate-version changes are misses; docs/tracker-only changes can reuse evidence only when the declared input digest proves they are unaffected.
 
 ## Approvals
 

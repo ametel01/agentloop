@@ -28,6 +28,7 @@ The installed `codex-dev-team-goal` skill owns claim comments and label mutation
 - SQLite state is created under the state directory with directory mode `0700` and database mode `0600`.
 - WAL mode, foreign keys, busy timeout, and ordered migrations are enabled before execution state is used.
 - SDK event payloads are redacted before persistence. Turn responses, approval responses, and failure messages are also redacted before durable storage and terminal output.
+- Checkpoint evidence-cache entries store compact redacted summaries and exact equivalence identifiers only. They do not store full command output, full authentication output, process environments, credentials, or final merge acceptance.
 - Redaction is best-effort pattern matching for common token/private-key forms. It is not a substitute for avoiding secrets in prompts, repository files, or tool output.
 
 ## Recovery Risks
@@ -35,9 +36,11 @@ The installed `codex-dev-team-goal` skill owns claim comments and label mutation
 - The durable boundary is an outer Codex turn. If a process exits after side effects but before a final envelope is persisted, recovery is at least once.
 - Stale worker leases are reclaimed only for `running` or `continuing` runs. Waiting, blocked, failed, exhausted, cancelled, and complete runs require explicit operator action where applicable.
 - Recovery prompts require live-state reconciliation before new actions, but the harness cannot prove that arbitrary external side effects were exactly once.
+- Evidence-cache hits are advisory. Installed skills must rerun gates or blocker checks when the head SHA or stable patch ID, relevant-input digest, environment fingerprint, or gate version is missing or different.
 
 ## Failure Handling
 
 - Corrupt or unwritable SQLite state stops execution rather than running without durable state.
 - Missing GitHub CLI, Codex CLI, SDK import support, required skills, or writable state/worktree directories fail preflight before autonomous work starts.
 - Operators should inspect `agentloop status` and `agentloop events` after interruption, failure, or stale-lease recovery before deciding whether to resume.
+- Unknown future SQLite schema versions fail closed. Additive rollback may ignore newer checkpoint, outcome, and evidence-cache tables, but Agentloop does not delete operational state automatically.

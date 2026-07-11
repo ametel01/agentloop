@@ -43,6 +43,7 @@ externally_blocked
 complete
 stuck
 budget_exhausted
+review_cycle_exhausted
 failed
 cancelled
 ```
@@ -65,11 +66,26 @@ Migration 1 creates:
 - `approvals`: durable human approval requests and resolution records.
 - `leases`: one active repository execution lease per repository key.
 
+Later additive migrations add turn abort reasons, usage-completeness markers, durable checkpoints, material outcomes, `last_useful_outcome_at`, and `evidence_cache`. Evidence cache rows are local operational hints keyed by repository, exact head SHA or stable patch ID, gate name/version, relevant-input digest, and environment fingerprint.
+
 SQLite is opened with WAL mode, foreign keys, busy timeout, synchronous normal, state directory mode `0700`, and database mode `0600`.
 
 ## Turn Boundary
 
-The outer Codex turn is the durable execution boundary. Events are persisted as they stream, and the final control envelope decides the next run state. If a process exits after side effects but before the final envelope is persisted, recovery is at least once and must reconcile live state before taking new actions.
+The outer Codex turn is the durable execution boundary. `BoundedTurnSupervisor` enforces the cooperative tranche, hard deadline, event-stall deadline, operator signal, and SDK failure classification while events stream. Events are persisted as they stream, checkpoints are stored during the stream, and a final control envelope decides the normal next run state. If a process exits after side effects but before the final envelope is persisted, recovery is at least once and must reconcile live state before taking new actions.
+
+Default limits are:
+
+- 10 minute cooperative tranche
+- 11 minute hard turn deadline
+- 4 minute event-stall deadline
+- 25 outer turns
+- 5,000,000 non-cached tokens
+- 8 hour wall duration
+- 2 consecutive failed turns
+- 2 unchanged-progress continuation turns
+
+Abort reasons are typed as operator cancellation, cooperative tranche elapsed, hard deadline, event stall, SDK failure, budget exhaustion, no progress, or review-cycle exhaustion. Cooperative tranche expiry transitions to `continuing`; operator cancellation transitions to `cancelled`; hard deadlines, stalls, and SDK failures are recoverable failures governed by configured caps.
 
 ## Recovery
 
@@ -88,8 +104,18 @@ Prompt templates are fixed for initial, continuation, recovery, and approval-res
 
 Prompt headers include the durable Agentloop run ID so installed skills can publish `[agentloop run:<RUN_ID>]` claim evidence and recover same-run work without trusting issue body content.
 
+Runtime prompt instructions include hot-ledger compaction and exact evidence-cache references when applicable. The harness measures `STATUS.md` bytes/lines but does not interpret its prose. Installed skills own the policy for keeping `STATUS.md` as a compact index, moving stream details to `STATUS.d/<issue-or-pr>.md`, reserving closure-first capacity, and stopping at the configured review-cycle cap.
+
+Control messages are a strict `checkpoint | final` union. Checkpoints are compact deltas with changed agents, material outcomes, blocker/approval changes, review-cycle state, next action, optional owned shard, and reusable evidence records. Final messages alone contain full closure evidence and terminal status.
+
 ## Leases And Budgets
 
 Foreground runs acquire a repository lease before execution. Detached workers atomically claim queued runs or expired active leases. Active execution renews the lease on the configured heartbeat interval and releases only the caller's own lease.
 
-The supervisor enforces maximum outer turns, non-cached token budget, wall duration, consecutive failures, unchanged progress count, and signal cancellation. Progress fingerprints hash `STATUS.md`, Git status, worktrees, GitHub issues, and GitHub PR summaries when available.
+The supervisor enforces maximum outer turns, non-cached token budget, wall duration, consecutive failures, unchanged progress count, and signal cancellation. Progress is based on unique material outcomes such as pushed head changes, PR state/review changes, closed issues, and typed blockers. Activity churn such as dirty files, tracker edits, repeated commands, and timestamp-only GitHub updates does not reset no-progress detection.
+
+## Evidence Reuse
+
+Checkpoint evidence records can populate the local evidence cache. Cache hits are advisory prompt references, not acceptance decisions. A lookup is valid only when all key dimensions match: repository key, head SHA or stable patch ID, gate name, gate version, relevant-input digest, and environment fingerprint. Missing or changed dimensions are misses. Cached payloads are compact and redacted; full command output, auth output, credentials, and final merge acceptance are not cached.
+
+Rollback is additive: older code can ignore checkpoint, outcome, and evidence-cache tables while leaving schema data in place. Unknown future schema versions still fail closed.
