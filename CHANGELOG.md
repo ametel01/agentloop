@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Split live control messages into compact checkpoints and strict final messages with explicit discriminators.
 - Track material Git/GitHub outcomes instead of activity fingerprints for no-progress decisions.
 - Enforce consecutive turn-failure limits before starting another Codex turn.
 - Keep interactive foreground sessions attached across paused open-run states and stream a compact structured roster with active/running/waiting/blocked counts, each agent's role and current task, coordinator decisions, and failures while hiding routine command/file/wait noise.

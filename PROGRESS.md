@@ -18,7 +18,7 @@
 - [x] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
 - [x] Step 3: Persist typed checkpoints and complete usage state.
 - [x] Step 4: Replace activity fingerprints with `OutcomeProgress`.
-- [ ] Step 5: Split compact checkpoints from final control messages.
+- [x] Step 5: Split compact checkpoints from final control messages.
 - [ ] Step 6: Bound hot context and enforce closure-first review policy.
 - [ ] Step 7: Add strict exact-head evidence reuse.
 - [ ] Step 8: Expose outcome efficiency, document operations, and run final gates.
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 4 complete and validated.
-- Next step: Step 5 checkpoint/final control-message split after the Step 4 commit.
+- Status: Step 5 complete and validated.
+- Next step: Step 6 hot context and closure-first review policy after the Step 5 commit.
 
 ## Update Rules
 
@@ -63,6 +63,10 @@
 - 2026-07-11: Step 4 tests covered stable Git/GitHub outcome keys, ignored activity/timestamp fields, fail-closed unavailable sources, idempotent outcome storage, and unchanged-outcome no-progress behavior.
 - 2026-07-11: Step 4 validation passed: targeted `bun run format && bun run typecheck && bun test test/unit/outcome-progress.test.ts test/unit/sqlite-run-store.test.ts test/unit/foreground-run.test.ts --timeout 10000`, then `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 85 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 4 Agentloop commit subject: `feat: track material outcomes instead of activity`.
+- 2026-07-11: Step 5 split control messages into `kind: "checkpoint"` and `kind: "final"`, required final messages for turn completion, persisted valid checkpoint messages during streams, and updated prompts to request compact checkpoint deltas plus final closure evidence only at the end.
+- 2026-07-11: Step 5 tests covered strict union schemas, final discriminator parsing, compact checkpoint parsing, checkpoint-before-final persistence, final-only completion, approval/blocker finals, security fixtures, and CLI black-box flows.
+- 2026-07-11: Step 5 validation passed: targeted `bun run typecheck && bun test test/unit/codex-contracts.test.ts test/unit/foreground-run.test.ts --timeout 10000`, then `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 87 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 5 Agentloop commit subject: `feat: separate checkpoint and final control messages`.
 
 ---
 

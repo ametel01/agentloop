@@ -6,7 +6,11 @@ import {
   buildInitialPrompt,
   buildRecoveryPrompt,
 } from "../../src/codex/prompt-builder.ts";
-import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "../../src/codex/control-envelope.ts";
+import {
+  CONTROL_ENVELOPE_SCHEMA,
+  parseControlEnvelope,
+  parseControlMessage,
+} from "../../src/codex/control-envelope.ts";
 import { buildThreadOptions } from "../../src/codex/thread-options.ts";
 import { DEFAULT_RUN_LIMITS, type RunRecord } from "../../src/domain/run.ts";
 
@@ -43,6 +47,7 @@ describe("Codex contracts", () => {
             reviewUrls: [],
             statusPath: "STATUS.md",
           },
+          kind: "final",
           status: "complete",
           summary: "not really done",
         }),
@@ -65,6 +70,7 @@ describe("Codex contracts", () => {
             statusPath: "STATUS.md",
           },
           extra: true,
+          kind: "final",
           status: "continue",
           summary: "continue",
         }),
@@ -98,6 +104,7 @@ describe("Codex contracts", () => {
           reviewUrls: [],
           statusPath: "STATUS.md",
         },
+        kind: "final",
         status: "waiting_approval",
         summary: "Needs merge approval",
       }),
@@ -124,6 +131,7 @@ describe("Codex contracts", () => {
           reviewUrls: [],
           statusPath: "STATUS.md",
         },
+        kind: "final",
         status: "externally_blocked",
         summary: "Merge permission is required",
       }),
@@ -153,6 +161,7 @@ describe("Codex contracts", () => {
         blocker: null,
         closureGatePassed: false,
         evidence: { issueUrls: [], prUrls: [], reviewUrls: [], statusPath: "STATUS.md" },
+        kind: "final",
         status: "continue",
         summary: "Checker 238 is active.",
       }),
@@ -168,6 +177,32 @@ describe("Codex contracts", () => {
     ]);
   });
 
+  test("parses compact checkpoint messages separately from finals", () => {
+    const message = parseControlMessage(
+      JSON.stringify({
+        agents: noActiveAgents(),
+        approval: null,
+        blocker: null,
+        kind: "checkpoint",
+        nextAction: "Continue validating PR 123.",
+        outcomes: ["pr:123:checks_green"],
+        ownedStatusShard: "STATUS.d/pr-123.md",
+        reviewCycle: {
+          currentCycle: 1,
+          maxCycles: 2,
+          prUrl: "https://github.com/example/repo/pull/123",
+        },
+        summary: "PR checks are green and review is in progress.",
+      }),
+    );
+
+    expect(message.kind).toBe("checkpoint");
+    if (message.kind === "checkpoint") {
+      expect(message.outcomes).toEqual(["pr:123:checks_green"]);
+      expect(message.ownedStatusShard).toBe("STATUS.d/pr-123.md");
+    }
+  });
+
   test("adds durable run identity to every coordinator prompt header", () => {
     const run = createRunRecord();
     const prompts = [
@@ -180,8 +215,8 @@ describe("Codex contracts", () => {
     for (const prompt of prompts) {
       expect(countOccurrences(prompt, "Run ID: run-123")).toBe(1);
       expect(prompt.indexOf("Run ID: run-123")).toBeLessThan(prompt.indexOf("<target_work>"));
-      expect(prompt).toContain("Keep the human operator informed during the turn");
-      expect(prompt).toContain("every active subagent's canonical name, role, current task");
+      expect(prompt).toContain("checkpoint control messages");
+      expect(prompt).toContain('final control message with kind "final"');
       expect(prompt).toContain("do not expose private chain-of-thought");
       expect(prompt).not.toContain("process.env");
       expect(prompt).not.toContain("OPENAI_API_KEY");

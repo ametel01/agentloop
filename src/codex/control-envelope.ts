@@ -1,4 +1,21 @@
+export interface ControlCheckpoint {
+  kind: "checkpoint";
+  summary: string;
+  agents: ControlEnvelope["agents"];
+  outcomes: string[];
+  approval: ControlEnvelope["approval"];
+  blocker: ControlEnvelope["blocker"];
+  reviewCycle: null | {
+    prUrl: string;
+    currentCycle: number;
+    maxCycles: number;
+  };
+  nextAction: string;
+  ownedStatusShard: string | null;
+}
+
 export interface ControlEnvelope {
+  kind: "final";
   status: "complete" | "continue" | "waiting_approval" | "externally_blocked";
   summary: string;
   agents: {
@@ -38,118 +55,201 @@ export interface ControlEnvelope {
   };
 }
 
-export const CONTROL_ENVELOPE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["status", "summary", "agents", "closureGatePassed", "evidence", "approval", "blocker"],
-  properties: {
-    status: {
-      type: "string",
-      enum: ["complete", "continue", "waiting_approval", "externally_blocked"],
-    },
-    summary: { type: "string" },
-    agents: {
-      type: "object",
-      additionalProperties: false,
-      required: ["coordinator", "subagents"],
-      properties: {
-        coordinator: {
+export type ControlMessage = ControlCheckpoint | ControlEnvelope;
+
+function agentsSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["coordinator", "subagents"],
+    properties: {
+      coordinator: {
+        type: "object",
+        additionalProperties: false,
+        required: ["status", "task"],
+        properties: {
+          status: {
+            type: "string",
+            enum: ["working", "waiting", "blocked", "complete"],
+          },
+          task: { type: "string" },
+        },
+      },
+      subagents: {
+        type: "array",
+        items: {
           type: "object",
           additionalProperties: false,
-          required: ["status", "task"],
+          required: ["name", "role", "status", "task"],
           properties: {
+            name: { type: "string" },
+            role: { type: "string" },
             status: {
               type: "string",
-              enum: ["working", "waiting", "blocked", "complete"],
+              enum: ["running", "waiting", "blocked"],
             },
             task: { type: "string" },
           },
         },
-        subagents: {
-          type: "array",
-          items: {
+      },
+    },
+  } as const;
+}
+
+function approvalSchema() {
+  return {
+    anyOf: [
+      { type: "null" },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "question", "risk", "operation"],
+        properties: {
+          kind: { type: "string" },
+          question: { type: "string" },
+          risk: { type: "string" },
+          operation: {
             type: "object",
             additionalProperties: false,
-            required: ["name", "role", "status", "task"],
+            required: ["action", "target", "details"],
             properties: {
-              name: { type: "string" },
-              role: { type: "string" },
-              status: {
-                type: "string",
-                enum: ["running", "waiting", "blocked"],
-              },
-              task: { type: "string" },
+              action: { type: "string" },
+              target: { type: "string" },
+              details: { type: "string" },
             },
           },
         },
       },
-    },
-    closureGatePassed: { type: "boolean" },
-    evidence: {
+    ],
+  } as const;
+}
+
+function blockerSchema() {
+  return {
+    anyOf: [
+      { type: "null" },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "message", "attemptedOperation", "evidence"],
+        properties: {
+          kind: { type: "string" },
+          message: { type: "string" },
+          attemptedOperation: { type: "string" },
+          evidence: { type: "array", items: { type: "string" } },
+        },
+      },
+    ],
+  } as const;
+}
+
+export const CONTROL_ENVELOPE_SCHEMA = {
+  anyOf: [
+    {
       type: "object",
       additionalProperties: false,
-      required: ["statusPath", "issueUrls", "prUrls", "reviewUrls"],
+      required: [
+        "kind",
+        "summary",
+        "agents",
+        "outcomes",
+        "approval",
+        "blocker",
+        "reviewCycle",
+        "nextAction",
+        "ownedStatusShard",
+      ],
       properties: {
-        statusPath: { type: "string" },
-        issueUrls: { type: "array", items: { type: "string" } },
-        prUrls: { type: "array", items: { type: "string" } },
-        reviewUrls: { type: "array", items: { type: "string" } },
-      },
-    },
-    approval: {
-      anyOf: [
-        { type: "null" },
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["kind", "question", "risk", "operation"],
-          properties: {
-            kind: { type: "string" },
-            question: { type: "string" },
-            risk: { type: "string" },
-            operation: {
+        kind: { type: "string", enum: ["checkpoint"] },
+        summary: { type: "string" },
+        agents: agentsSchema(),
+        outcomes: { type: "array", items: { type: "string" } },
+        approval: approvalSchema(),
+        blocker: blockerSchema(),
+        reviewCycle: {
+          anyOf: [
+            { type: "null" },
+            {
               type: "object",
               additionalProperties: false,
-              required: ["action", "target", "details"],
+              required: ["prUrl", "currentCycle", "maxCycles"],
               properties: {
-                action: { type: "string" },
-                target: { type: "string" },
-                details: { type: "string" },
+                prUrl: { type: "string" },
+                currentCycle: { type: "number" },
+                maxCycles: { type: "number" },
               },
             },
-          },
+          ],
         },
-      ],
+        nextAction: { type: "string" },
+        ownedStatusShard: { anyOf: [{ type: "null" }, { type: "string" }] },
+      },
     },
-    blocker: {
-      anyOf: [
-        { type: "null" },
-        {
+    {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "kind",
+        "status",
+        "summary",
+        "agents",
+        "closureGatePassed",
+        "evidence",
+        "approval",
+        "blocker",
+      ],
+      properties: {
+        kind: { type: "string", enum: ["final"] },
+        status: {
+          type: "string",
+          enum: ["complete", "continue", "waiting_approval", "externally_blocked"],
+        },
+        summary: { type: "string" },
+        agents: agentsSchema(),
+        closureGatePassed: { type: "boolean" },
+        evidence: {
           type: "object",
           additionalProperties: false,
-          required: ["kind", "message", "attemptedOperation", "evidence"],
+          required: ["statusPath", "issueUrls", "prUrls", "reviewUrls"],
           properties: {
-            kind: { type: "string" },
-            message: { type: "string" },
-            attemptedOperation: { type: "string" },
-            evidence: { type: "array", items: { type: "string" } },
+            statusPath: { type: "string" },
+            issueUrls: { type: "array", items: { type: "string" } },
+            prUrls: { type: "array", items: { type: "string" } },
+            reviewUrls: { type: "array", items: { type: "string" } },
           },
         },
-      ],
+        approval: approvalSchema(),
+        blocker: blockerSchema(),
+      },
     },
-  },
+  ],
 } as const;
 
-export function parseControlEnvelope(text: string): ControlEnvelope {
+export function parseControlMessage(text: string): ControlMessage {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error) {
-    throw new Error(`Malformed control envelope JSON: ${errorMessage(error)}`);
+    throw new Error(`Malformed control message JSON: ${errorMessage(error)}`);
   }
 
-  assertEnvelope(value);
+  assertControlMessage(value);
+  if (value.kind === "final") {
+    validateFinalEnvelope(value);
+  }
+  return value;
+}
 
+export function parseControlEnvelope(text: string): ControlEnvelope {
+  const value = parseControlMessage(text);
+  if (value.kind !== "final") {
+    throw new Error("Codex turn completed without a final control message");
+  }
+
+  return value;
+}
+
+function validateFinalEnvelope(value: ControlEnvelope): void {
   if (value.status === "complete" && !value.closureGatePassed) {
     throw new Error("Complete envelope rejected because closureGatePassed is false");
   }
@@ -161,13 +261,57 @@ export function parseControlEnvelope(text: string): ControlEnvelope {
   if (value.status === "externally_blocked" && value.blocker === null) {
     throw new Error("externally_blocked envelope requires blocker details");
   }
+}
 
-  return value;
+function assertControlMessage(value: unknown): asserts value is ControlMessage {
+  if (!isRecord(value)) {
+    throw new Error("Control message must be an object");
+  }
+
+  if (value.kind === "checkpoint") {
+    assertCheckpoint(value);
+    return;
+  }
+
+  if (value.kind === "final") {
+    assertEnvelope(value);
+    return;
+  }
+
+  throw new Error("Control message kind must be checkpoint or final");
+}
+
+function assertCheckpoint(value: unknown): asserts value is ControlCheckpoint {
+  if (!isRecord(value)) {
+    throw new Error("checkpoint must be an object");
+  }
+
+  assertExactKeys(value, [
+    "agents",
+    "approval",
+    "blocker",
+    "kind",
+    "nextAction",
+    "outcomes",
+    "ownedStatusShard",
+    "reviewCycle",
+    "summary",
+  ]);
+  assertString(value.summary, "summary");
+  assertAgents(value.agents);
+  assertStringArray(value.outcomes, "outcomes");
+  assertApproval(value.approval);
+  assertBlocker(value.blocker);
+  assertReviewCycle(value.reviewCycle);
+  assertString(value.nextAction, "nextAction");
+  if (value.ownedStatusShard !== null) {
+    assertString(value.ownedStatusShard, "ownedStatusShard");
+  }
 }
 
 function assertEnvelope(value: unknown): asserts value is ControlEnvelope {
   if (!isRecord(value)) {
-    throw new Error("Control envelope must be an object");
+    throw new Error("final control message must be an object");
   }
 
   assertExactKeys(value, [
@@ -176,6 +320,7 @@ function assertEnvelope(value: unknown): asserts value is ControlEnvelope {
     "blocker",
     "closureGatePassed",
     "evidence",
+    "kind",
     "status",
     "summary",
   ]);
@@ -273,6 +418,21 @@ function assertBlocker(value: unknown): asserts value is ControlEnvelope["blocke
   assertStringArray(value.evidence, "blocker.evidence");
 }
 
+function assertReviewCycle(value: unknown): asserts value is ControlCheckpoint["reviewCycle"] {
+  if (value === null) {
+    return;
+  }
+
+  if (!isRecord(value)) {
+    throw new Error("reviewCycle must be null or an object");
+  }
+
+  assertExactKeys(value, ["currentCycle", "maxCycles", "prUrl"]);
+  assertString(value.prUrl, "reviewCycle.prUrl");
+  assertNumber(value.currentCycle, "reviewCycle.currentCycle");
+  assertNumber(value.maxCycles, "reviewCycle.maxCycles");
+}
+
 function assertExactKeys(value: Record<string, unknown>, keys: readonly string[]): void {
   const expected = [...keys].sort();
   const actual = Object.keys(value).sort();
@@ -296,6 +456,12 @@ function assertString(value: unknown, path: string): asserts value is string {
 function assertBoolean(value: unknown, path: string): asserts value is boolean {
   if (typeof value !== "boolean") {
     throw new Error(`${path} must be a boolean`);
+  }
+}
+
+function assertNumber(value: unknown, path: string): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${path} must be a finite number`);
   }
 }
 

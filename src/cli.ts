@@ -12,9 +12,13 @@ import { runDoctor, type DoctorDependencies } from "./application/doctor.ts";
 import { buildDispatchObjective, discoverReadyIssues } from "./application/dispatch.ts";
 import { resolveStateDir } from "./application/paths.ts";
 import type { Clock, IdGenerator, Scheduler } from "./application/ports.ts";
-import { CONTROL_ENVELOPE_SCHEMA, parseControlEnvelope } from "./codex/control-envelope.ts";
+import {
+  CONTROL_ENVELOPE_SCHEMA,
+  parseControlEnvelope,
+  parseControlMessage,
+} from "./codex/control-envelope.ts";
 import { ProductionCodexRunner, type CodexRunner } from "./codex/client.ts";
-import { eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
+import { agentMessageText, eventItemId, eventPayloadJson } from "./codex/event-mapper.ts";
 import {
   buildApprovalResponsePrompt,
   buildContinuationPrompt,
@@ -709,6 +713,16 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
               });
 
         io.stdout(renderEventText(eventRecord));
+        const messageText = agentMessageText(event);
+        if (messageText !== null) {
+          persistCheckpointMessage({
+            clock,
+            messageText,
+            runId: run.id,
+            store,
+            turnId,
+          });
+        }
       },
       request: {
         outputSchema: CONTROL_ENVELOPE_SCHEMA,
@@ -1099,6 +1113,41 @@ function createTurnCheckpoint(input: {
     status: input.status,
     turnId: input.turnId,
     usageComplete: input.usageComplete,
+  });
+}
+
+function persistCheckpointMessage(input: {
+  clock: Clock;
+  messageText: string;
+  runId: string;
+  store: SqliteRunStore;
+  turnId: string;
+}): void {
+  let message: ReturnType<typeof parseControlMessage>;
+  try {
+    message = parseControlMessage(input.messageText);
+  } catch {
+    return;
+  }
+
+  if (message.kind !== "checkpoint") {
+    return;
+  }
+
+  input.store.createCheckpoint({
+    abortReason: null,
+    createdAt: input.clock.now().toISOString(),
+    payloadJson: redactJson({
+      nextAction: message.nextAction,
+      outcomes: message.outcomes,
+      ownedStatusShard: message.ownedStatusShard,
+      reviewCycle: message.reviewCycle,
+      summary: message.summary,
+    }),
+    runId: input.runId,
+    status: "checkpoint",
+    turnId: input.turnId,
+    usageComplete: false,
   });
 }
 

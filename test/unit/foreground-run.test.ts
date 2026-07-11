@@ -115,7 +115,7 @@ describe("foreground run", () => {
     );
 
     expect(exitCode).toBe(70);
-    expect(stderr.join("")).toContain("Malformed control envelope JSON");
+    expect(stderr.join("")).toContain("Malformed control message JSON");
 
     const statusJson: string[] = [];
     await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
@@ -125,7 +125,7 @@ describe("foreground run", () => {
 
     const run = JSON.parse(statusJson.join("")) as { status: string; lastError: string };
     expect(run.status).toBe("failed");
-    expect(run.lastError).toContain("Malformed control envelope JSON");
+    expect(run.lastError).toContain("Malformed control message JSON");
   });
 
   test("keeps an interactive foreground monitor attached after a recoverable failure", async () => {
@@ -193,6 +193,38 @@ describe("foreground run", () => {
     const run = JSON.parse(statusJson.join("")) as { status: string; turnsCompleted: number };
     expect(run.status).toBe("complete");
     expect(run.turnsCompleted).toBe(2);
+  });
+
+  test("persists checkpoint messages before requiring a final message", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "checkpoint then final", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(checkpointThenFinalEvents())),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      checkpoints: Array<{ payload: { nextAction?: string; summary?: string }; status: string }>;
+      status: string;
+    };
+
+    expect(run.status).toBe("complete");
+    expect(run.checkpoints.map((checkpoint) => checkpoint.status)).toEqual([
+      "checkpoint",
+      "completed",
+    ]);
+    expect(run.checkpoints[0]?.payload.nextAction).toBe("Finish final validation.");
+    expect(run.checkpoints[1]?.payload.summary).toBe("done");
   });
 
   test("resumes a failed run with a saved thread ID using the recovery prompt", async () => {
@@ -1387,6 +1419,7 @@ function observableEvents(): ThreadEvent[] {
           blocker: null,
           closureGatePassed: false,
           evidence: { issueUrls: [], prUrls: [], reviewUrls: [], statusPath: "STATUS.md" },
+          kind: "final",
           status: "continue",
           summary: "I found two independent issues and assigned their current work.",
         }),
@@ -1472,6 +1505,32 @@ function completeWithoutThreadStartedEvents(): ThreadEvent[] {
   return completeEnvelopeEvents({ includeThreadStarted: false, status: "complete" });
 }
 
+function checkpointThenFinalEvents(): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      item: {
+        id: "checkpoint-1",
+        text: JSON.stringify({
+          agents: noActiveAgents(),
+          approval: null,
+          blocker: null,
+          kind: "checkpoint",
+          nextAction: "Finish final validation.",
+          outcomes: ["git-head:abc123"],
+          ownedStatusShard: null,
+          reviewCycle: null,
+          summary: "Validation is almost complete.",
+        }),
+        type: "agent_message",
+      },
+      type: "item.completed",
+    },
+    ...completeWithoutThreadStartedEvents().slice(1),
+  ];
+}
+
 function continueEvents(): ThreadEvent[] {
   return completeEnvelopeEvents({ includeThreadStarted: true, status: "continue" });
 }
@@ -1503,6 +1562,7 @@ function waitingApprovalEvents(): ThreadEvent[] {
             reviewUrls: [],
             statusPath: "STATUS.md",
           },
+          kind: "final",
           status: "waiting_approval",
           summary: "Needs merge approval",
         }),
@@ -1546,6 +1606,7 @@ function completeEnvelopeEvents(options: {
             reviewUrls: [],
             statusPath: "STATUS.md",
           },
+          kind: "final",
           status: options.status,
           summary: options.status === "complete" ? "done" : "continue",
         }),
@@ -1592,6 +1653,7 @@ function secretCompleteEvents(secret: string): ThreadEvent[] {
             reviewUrls: [],
             statusPath: "STATUS.md",
           },
+          kind: "final",
           status: "complete",
           summary: `done without leaking ${secret}`,
         }),
