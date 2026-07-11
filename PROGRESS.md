@@ -1,3 +1,57 @@
+# Bounded Supervisor Implementation Progress
+
+## Plan Sources
+
+- `PLAN.md`: bounded-turn supervisor, checkpoint, outcome-progress, context, evidence, and operator-efficiency implementation plan.
+- `AGENTS.md`: Bun-only toolchain, strict TypeScript, fake-backed default tests, and explicit repository trust rules.
+- `docs/architecture.md`: Agentloop owns durable runs, limits, events, leases, recovery, and state transitions while installed skills own workflow semantics.
+- `docs/operations.md`: local run state, foreground/worker behavior, event output, stale-lease recovery, and incident handling.
+- `docs/security.md`: trust, credential, subprocess, persistence, and redaction constraints.
+- `/Users/alexmetelli/.agents/skills/codex-dev-team-goal/SKILL.md`: coordinator policy affected by bounded ledgers, closure-first scheduling, and review caps.
+- `/Users/alexmetelli/.agents/skills/team-coordinator/SKILL.md`: scheduling policy affected by nearest-to-merge reservation and speculative-stream limits.
+- `/Users/alexmetelli/.agents/skills/agent-team-status-protocol/SKILL.md`: hot `STATUS.md` index and shard policy.
+
+## Checklist
+
+- [x] Step 0: Progress and changelog tracking setup.
+- [ ] Step 1: Characterize current turn, cancellation, and persistence semantics.
+- [ ] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
+- [ ] Step 3: Persist typed checkpoints and complete usage state.
+- [ ] Step 4: Replace activity fingerprints with `OutcomeProgress`.
+- [ ] Step 5: Split compact checkpoints from final control messages.
+- [ ] Step 6: Bound hot context and enforce closure-first review policy.
+- [ ] Step 7: Add strict exact-head evidence reuse.
+- [ ] Step 8: Expose outcome efficiency, document operations, and run final gates.
+
+## Baseline
+
+- Current branch: `main` tracking `origin/main`.
+- Pre-existing dirty files before Step 0: none (`git status --short --branch` reported `## main...origin/main`).
+- Prior progress history is preserved below under "Prior Label Dispatch Progress".
+- `CHANGELOG.md` already has `# Changelog`, the Keep a Changelog preamble, and one `## [Unreleased]` section.
+
+## Current Status
+
+- Status: Step 0 complete and validated.
+- Next step: Step 1 characterization tests after the Step 0 commit.
+
+## Update Rules
+
+- Update this file after each completed step with validation results, commit reference if available, current status, and the next step.
+- Update `CHANGELOG.md` before each step commit only when the completed step ships a functional change.
+- Keep Agentloop and installed-skills commits separate when a step touches both repositories.
+- Preserve unrelated user-owned changes and stage only the completed step's intended files.
+
+## Update Log
+
+- 2026-07-11: Reconciled progress tracking for the bounded-supervisor plan, recorded the clean baseline, preserved prior label-dispatch progress history, and confirmed `CHANGELOG.md` already satisfies the plan's top-level structure.
+- 2026-07-11: Step 0 validation passed: `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 73 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 0 Agentloop commit subject: `chore: initialize bounded-supervisor progress tracking`.
+
+---
+
+# Prior Label Dispatch Progress
+
 # Label Dispatch Implementation Progress
 
 ## Plan Sources
