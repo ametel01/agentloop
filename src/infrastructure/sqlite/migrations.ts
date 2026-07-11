@@ -197,6 +197,7 @@ function applyMigration1(database: Database): void {
       'externally_blocked',
       'stuck',
       'budget_exhausted',
+      'review_cycle_exhausted',
       'failed'
     )
   `);

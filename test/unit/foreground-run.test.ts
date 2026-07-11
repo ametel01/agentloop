@@ -227,6 +227,65 @@ describe("foreground run", () => {
     expect(run.checkpoints[1]?.payload.summary).toBe("done");
   });
 
+  test("stops advancement when checkpoint review cycle reaches the configured cap", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner([reviewCycleCapEvents(), completeEvents()]);
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "review cap", "--trust-repo"],
+      createDependencies(codexRunner, "v1", true),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs).toHaveLength(1);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      lastError: string;
+      latestCheckpoint: { abortReason: string; payload: { reviewCycle: { maxCycles: number } } };
+      status: string;
+      turns: Array<{ abortReason: string; status: string; usageComplete: boolean }>;
+    };
+
+    expect(run.status).toBe("review_cycle_exhausted");
+    expect(run.lastError).toContain("cycle 2/2");
+    expect(run.latestCheckpoint.abortReason).toBe("review_cycle_exhausted");
+    expect(run.latestCheckpoint.payload.reviewCycle.maxCycles).toBe(2);
+    expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.abortReason).toBe("review_cycle_exhausted");
+    expect(run.turns[0]?.usageComplete).toBe(true);
+  });
+
+  test("injects hot-state compaction instruction before assignment when STATUS.md is oversized", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const codexRunner = new FakeCodexRunner(completeEvents());
+    const dependencies = createDependencies(codexRunner);
+    dependencies.fileSystem.addFile(
+      "/work/agentloop/STATUS.md",
+      Array.from({ length: 201 }, (_, index) => `line ${index}`).join("\n"),
+    );
+
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "oversized status", "--trust-repo"],
+      dependencies,
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(codexRunner.inputs[0]?.prompt).toContain("STATUS.md is oversized");
+    expect(codexRunner.inputs[0]?.prompt).toContain("STATUS.d/<issue-or-pr>.md");
+  });
+
   test("resumes a failed run with a saved thread ID using the recovery prompt", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
     tempDirs.push(stateDir);
@@ -1528,6 +1587,36 @@ function checkpointThenFinalEvents(): ThreadEvent[] {
       type: "item.completed",
     },
     ...completeWithoutThreadStartedEvents().slice(1),
+  ];
+}
+
+function reviewCycleCapEvents(): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      item: {
+        id: "checkpoint-review-cap",
+        text: JSON.stringify({
+          agents: noActiveAgents(),
+          approval: null,
+          blocker: null,
+          kind: "checkpoint",
+          nextAction: "Stop before review cycle 3.",
+          outcomes: [],
+          ownedStatusShard: "STATUS.d/pr-123.md",
+          reviewCycle: {
+            currentCycle: 2,
+            maxCycles: 2,
+            prUrl: "https://github.com/example/repo/pull/123",
+          },
+          summary: "Review cap reached.",
+        }),
+        type: "agent_message",
+      },
+      type: "item.completed",
+    },
+    ...completeEnvelopeEvents({ includeThreadStarted: false, status: "continue" }).slice(1),
   ];
 }
 

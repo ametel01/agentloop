@@ -19,7 +19,7 @@
 - [x] Step 3: Persist typed checkpoints and complete usage state.
 - [x] Step 4: Replace activity fingerprints with `OutcomeProgress`.
 - [x] Step 5: Split compact checkpoints from final control messages.
-- [ ] Step 6: Bound hot context and enforce closure-first review policy.
+- [x] Step 6: Bound hot context and enforce closure-first review policy.
 - [ ] Step 7: Add strict exact-head evidence reuse.
 - [ ] Step 8: Expose outcome efficiency, document operations, and run final gates.
 
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 5 complete and validated.
-- Next step: Step 6 hot context and closure-first review policy after the Step 5 commit.
+- Status: Step 6 complete and validated in both Agentloop and installed skills.
+- Next step: Step 7 strict exact-head evidence reuse.
 
 ## Update Rules
 
@@ -67,6 +67,11 @@
 - 2026-07-11: Step 5 tests covered strict union schemas, final discriminator parsing, compact checkpoint parsing, checkpoint-before-final persistence, final-only completion, approval/blocker finals, security fixtures, and CLI black-box flows.
 - 2026-07-11: Step 5 validation passed: targeted `bun run typecheck && bun test test/unit/codex-contracts.test.ts test/unit/foreground-run.test.ts --timeout 10000`, then `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 87 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 5 Agentloop commit subject: `feat: separate checkpoint and final control messages`.
+- 2026-07-11: Step 6 Agentloop changes added hot `STATUS.md` size inspection before each tranche, compaction/sharding prompt instructions, checkpoint shard-path normalization, a recoverable `review_cycle_exhausted` run status, and checkpoint-driven review-cycle-cap stopping before another continuation.
+- 2026-07-11: Step 6 installed-skill changes updated coordinator/status policy for bounded hot status shards, closure-first slot reservation, one speculative stream while PR work is blocked, early draft PRs, exact-head finding batches, and review-cycle-cap stopping.
+- 2026-07-11: Step 6 validation passed: targeted `bun run typecheck` and `bun test test/unit/foreground-run.test.ts --timeout 10000`, full `bun run format && bun run verify`, `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json /Users/alexmetelli/.agents/skills/team-coordinator/evals/evals.json /Users/alexmetelli/.agents/skills/agent-team-status-protocol/evals/evals.json`, and `git -C /Users/alexmetelli/.agents/skills diff --check`. Test summary: 89 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 6 Agentloop commit subject: `feat: bound hot coordination context and review cycles`.
+- 2026-07-11: Step 6 installed-skills commit: `ea2bc42` (`feat: prioritize closure in bounded agent loops`).
 
 ---
 

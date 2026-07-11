@@ -227,6 +227,7 @@ export class SqliteRunStore implements RunStore {
               'externally_blocked',
               'stuck',
               'budget_exhausted',
+              'review_cycle_exhausted',
               'failed'
             )
           LIMIT 1
@@ -323,6 +324,7 @@ export class SqliteRunStore implements RunStore {
             'externally_blocked',
             'stuck',
             'budget_exhausted',
+            'review_cycle_exhausted',
             'failed'
           )
         ORDER BY created_at ASC
@@ -402,7 +404,7 @@ export class SqliteRunStore implements RunStore {
               updated_at = ?,
               finished_at = CASE WHEN ? IN ('complete', 'cancelled') THEN ? ELSE finished_at END,
               last_error = CASE
-                WHEN ? IN ('failed', 'cancelled', 'stuck', 'budget_exhausted') THEN ?
+                WHEN ? IN ('failed', 'cancelled', 'stuck', 'budget_exhausted', 'review_cycle_exhausted') THEN ?
                 ELSE last_error
               END
           WHERE id = ? AND status = ?

@@ -9,6 +9,7 @@ export type RunStatus =
   | "complete"
   | "stuck"
   | "budget_exhausted"
+  | "review_cycle_exhausted"
   | "failed"
   | "cancelled";
 
@@ -170,5 +171,6 @@ export const OPEN_RUN_STATUSES: readonly RunStatus[] = [
   "externally_blocked",
   "stuck",
   "budget_exhausted",
+  "review_cycle_exhausted",
   "failed",
 ];

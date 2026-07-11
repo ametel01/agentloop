@@ -10,6 +10,7 @@ import {
 } from "./application/bounded-turn-supervisor.ts";
 import { runDoctor, type DoctorDependencies } from "./application/doctor.ts";
 import { buildDispatchObjective, discoverReadyIssues } from "./application/dispatch.ts";
+import { inspectHotState, normalizeOwnedStatusShard } from "./application/hot-state.ts";
 import { resolveStateDir } from "./application/paths.ts";
 import type { Clock, IdGenerator, Scheduler } from "./application/ports.ts";
 import {
@@ -75,7 +76,7 @@ Commands:
   doctor   Run read-only repository, toolchain, GitHub, SDK, and skill preflight checks.
   dispatch Queue one repository-level run for open issues labeled agentloop:ready.
   run      Create a durable run, or execute it immediately without --detach.
-  resume   Resume a continuing, interrupted, blocked, stuck, exhausted, or failed run.
+  resume   Resume a continuing, interrupted, blocked, stuck, exhausted, review-capped, or failed run.
   approve  Approve one pending durable human approval and resume the run.
   reject   Reject one pending durable human approval and cancel the run.
   worker   Claim queued or expired recoverable runs and execute them.
@@ -643,6 +644,7 @@ function renderOperatorAction(run: RunRecord): string {
     run.status === "externally_blocked" ||
     run.status === "stuck" ||
     run.status === "budget_exhausted" ||
+    run.status === "review_cycle_exhausted" ||
     run.status === "failed"
   ) {
     return `operator: agentloop resume ${run.id} --message "Operator context"\n`;
@@ -667,7 +669,11 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new RandomIdGenerator();
   const turnId = idGenerator.randomId();
-  const prompt = buildPrompt(turnKind, run, input.message, input.approvalId);
+  const hotState = await inspectHotState({
+    fileSystem: dependencies.fileSystem,
+    repoPath: run.repoPath,
+  });
+  const prompt = buildPrompt(turnKind, run, input.message, input.approvalId, hotState.instruction);
   store.createTurn({
     fingerprintBefore: null,
     id: turnId,
@@ -689,6 +695,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       dependencies.scheduler ?? new SystemScheduler(),
       BoundedTurnSupervisor.policyFromLimits(run.limits),
     );
+    let reviewCycleStop: ReviewCycleStop | null = null;
     const outcome = await supervisor.runTranche({
       onEvent: (event) => {
         const createdAt = clock.now().toISOString();
@@ -715,13 +722,14 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
         io.stdout(renderEventText(eventRecord));
         const messageText = agentMessageText(event);
         if (messageText !== null) {
-          persistCheckpointMessage({
-            clock,
-            messageText,
-            runId: run.id,
-            store,
-            turnId,
-          });
+          reviewCycleStop =
+            persistCheckpointMessage({
+              clock,
+              messageText,
+              runId: run.id,
+              store,
+              turnId,
+            }) ?? reviewCycleStop;
         }
       },
       request: {
@@ -742,6 +750,47 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
     finalText = outcome.finalText;
     usage = outcome.usage;
     usageComplete = outcome.usageComplete;
+
+    if (reviewCycleStop !== null) {
+      const summary = reviewCycleStopMessage(reviewCycleStop);
+      store.completeTurn({
+        abortReason: "review_cycle_exhausted",
+        errorJson: JSON.stringify({
+          message: summary,
+          reason: "review_cycle_exhausted",
+          reviewCycle: reviewCycleStop,
+        }),
+        fingerprintAfter: null,
+        finishedAt: clock.now().toISOString(),
+        id: turnId,
+        responseJson: finalText,
+        status: "aborted",
+        usage,
+        usageComplete,
+      });
+      createTurnCheckpoint({
+        abortReason: "review_cycle_exhausted",
+        clock,
+        payload: {
+          nextStatus: "review_cycle_exhausted",
+          reviewCycle: reviewCycleStop,
+          summary,
+        },
+        runId: run.id,
+        status: "review_cycle_exhausted",
+        store,
+        turnId,
+        usageComplete,
+      });
+
+      return store.transitionRun({
+        expectedStatus: "running",
+        id: run.id,
+        nextStatus: "review_cycle_exhausted",
+        now: clock.now().toISOString(),
+        reason: summary,
+      });
+    }
 
     if (outcome.status === "aborted") {
       if (outcome.abortReason === "sdk_failed") {
@@ -1017,19 +1066,21 @@ function buildPrompt(
   run: RunRecord,
   message: string | null,
   approvalId: string | null,
+  hotStateInstruction: string | null,
 ): string {
   switch (turnKind) {
     case "initial":
-      return buildInitialPrompt(run);
+      return buildInitialPrompt(run, hotStateInstruction);
     case "continuation":
-      return buildContinuationPrompt(run);
+      return buildContinuationPrompt(run, hotStateInstruction);
     case "recovery":
-      return buildRecoveryPrompt(run, message);
+      return buildRecoveryPrompt(run, message, hotStateInstruction);
     case "approval-response":
       return buildApprovalResponsePrompt(
         run,
         requireString(approvalId ?? undefined, "approval ID"),
         requireString(message ?? undefined, "approval response"),
+        hotStateInstruction,
       );
   }
 }
@@ -1116,23 +1167,32 @@ function createTurnCheckpoint(input: {
   });
 }
 
+interface ReviewCycleStop {
+  currentCycle: number;
+  maxCycles: number;
+  prUrl: string;
+}
+
 function persistCheckpointMessage(input: {
   clock: Clock;
   messageText: string;
   runId: string;
   store: SqliteRunStore;
   turnId: string;
-}): void {
+}): ReviewCycleStop | null {
   let message: ReturnType<typeof parseControlMessage>;
   try {
     message = parseControlMessage(input.messageText);
   } catch {
-    return;
+    return null;
   }
 
   if (message.kind !== "checkpoint") {
-    return;
+    return null;
   }
+
+  const reviewCycle = message.reviewCycle;
+  const ownedStatusShard = normalizeOwnedStatusShard(message.ownedStatusShard);
 
   input.store.createCheckpoint({
     abortReason: null,
@@ -1140,8 +1200,8 @@ function persistCheckpointMessage(input: {
     payloadJson: redactJson({
       nextAction: message.nextAction,
       outcomes: message.outcomes,
-      ownedStatusShard: message.ownedStatusShard,
-      reviewCycle: message.reviewCycle,
+      ownedStatusShard,
+      reviewCycle,
       summary: message.summary,
     }),
     runId: input.runId,
@@ -1149,6 +1209,20 @@ function persistCheckpointMessage(input: {
     turnId: input.turnId,
     usageComplete: false,
   });
+
+  if (reviewCycle === null || reviewCycle.currentCycle < reviewCycle.maxCycles) {
+    return null;
+  }
+
+  return {
+    currentCycle: reviewCycle.currentCycle,
+    maxCycles: reviewCycle.maxCycles,
+    prUrl: reviewCycle.prUrl,
+  };
+}
+
+function reviewCycleStopMessage(reviewCycle: ReviewCycleStop): string {
+  return `review cycle cap exhausted for ${reviewCycle.prUrl}: cycle ${reviewCycle.currentCycle}/${reviewCycle.maxCycles}`;
 }
 
 async function resumeCommand(
@@ -1260,6 +1334,7 @@ function transitionToContinuingForResume(
     case "externally_blocked":
     case "stuck":
     case "budget_exhausted":
+    case "review_cycle_exhausted":
     case "failed":
       return store.transitionRun({
         expectedStatus: run.status,

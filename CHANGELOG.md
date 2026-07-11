@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add hot `STATUS.md` size inspection, compaction/sharding prompt instructions, and typed review-cycle-cap stops.
 - Add durable tranche checkpoints with explicit turn abort reasons and usage-completeness markers.
 - Add bounded Codex tranche supervision with cooperative timeout, hard-deadline, and event-stall classification.
 - Add the label-scoped `dispatch` command for idempotent scheduled polling, dry runs, no-ready-issue no-ops, and already-active run detection.
@@ -24,6 +25,7 @@ and this project adheres to Semantic Versioning.
 
 ### Changed
 
+- Normalize owned checkpoint status-shard paths so absolute paths and parent traversal are not persisted.
 - Split live control messages into compact checkpoints and strict final messages with explicit discriminators.
 - Track material Git/GitHub outcomes instead of activity fingerprints for no-progress decisions.
 - Enforce consecutive turn-failure limits before starting another Codex turn.
