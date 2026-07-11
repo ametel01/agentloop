@@ -622,6 +622,80 @@ describe("foreground run", () => {
     expect(run.status).toBe("cancelled");
   });
 
+  test("characterizes SDK failure after thread.started as failed with saved thread and zero usage", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const stderr: string[] = [];
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "fail after thread", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(threadStartedThenErrorEvents())),
+      {
+        stdout: () => {},
+        stderr: (message) => stderr.push(message),
+      },
+    );
+
+    expect(exitCode).toBe(70);
+    expect(stderr.join("")).toContain("stream failed after durable thread");
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      consecutiveFailures: number;
+      status: string;
+      threadId: string | null;
+      turns: Array<{ errorJson: string | null; status: string; usage: { inputTokens: number } }>;
+      turnsCompleted: number;
+      usage: { inputTokens: number };
+    };
+
+    expect(run.status).toBe("failed");
+    expect(run.threadId).toBe("thread-1");
+    expect(run.consecutiveFailures).toBe(1);
+    expect(run.turnsCompleted).toBe(0);
+    expect(run.usage.inputTokens).toBe(0);
+    expect(run.turns[0]?.status).toBe("failed");
+    expect(run.turns[0]?.usage.inputTokens).toBe(0);
+    expect(run.turns[0]?.errorJson).toContain("stream failed after durable thread");
+  });
+
+  test("characterizes missing official usage as a completed zero-usage turn", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "agentloop-foreground-test-"));
+    tempDirs.push(stateDir);
+    process.env.AGENTLOOP_STATE_DIR = stateDir;
+
+    const exitCode = await runCli(
+      ["run", "--repo", ".", "--goal", "missing usage", "--trust-repo"],
+      createDependencies(new FakeCodexRunner(completeWithoutUsageEvents())),
+      quietIo(),
+    );
+
+    expect(exitCode).toBe(0);
+
+    const statusJson: string[] = [];
+    await runCli(["status", "id-1", "--json"], createDependencies(new FakeCodexRunner([])), {
+      stdout: (message) => statusJson.push(message),
+      stderr: () => {},
+    });
+    const run = JSON.parse(statusJson.join("")) as {
+      status: string;
+      turns: Array<{ status: string; usage: { inputTokens: number } }>;
+      turnsCompleted: number;
+      usage: { inputTokens: number; outputTokens: number; reasoningTokens: number };
+    };
+
+    expect(run.status).toBe("complete");
+    expect(run.turnsCompleted).toBe(1);
+    expect(run.usage).toMatchObject({ inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
+    expect(run.turns[0]?.status).toBe("completed");
+    expect(run.turns[0]?.usage.inputTokens).toBe(0);
+  });
+
   test("worker --once executes a detached queued run", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "agentloop-worker-test-"));
     tempDirs.push(stateDir);
@@ -1358,11 +1432,28 @@ function malformedEvents(): ThreadEvent[] {
   ];
 }
 
+function completeWithoutUsageEvents(): ThreadEvent[] {
+  return completeEnvelopeEvents({ includeThreadStarted: true, status: "complete" }).filter(
+    (event) => event.type !== "turn.completed",
+  );
+}
+
 function eventThenErrorEvents(): ThreadEvent[] {
   return [
     { type: "turn.started" },
     {
       message: "stream failed after event",
+      type: "error",
+    },
+  ];
+}
+
+function threadStartedThenErrorEvents(): ThreadEvent[] {
+  return [
+    { thread_id: "thread-1", type: "thread.started" },
+    { type: "turn.started" },
+    {
+      message: "stream failed after durable thread",
       type: "error",
     },
   ];

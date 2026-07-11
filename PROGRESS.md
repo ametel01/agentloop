@@ -14,7 +14,7 @@
 ## Checklist
 
 - [x] Step 0: Progress and changelog tracking setup.
-- [ ] Step 1: Characterize current turn, cancellation, and persistence semantics.
+- [x] Step 1: Characterize current turn, cancellation, and persistence semantics.
 - [ ] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
 - [ ] Step 3: Persist typed checkpoints and complete usage state.
 - [ ] Step 4: Replace activity fingerprints with `OutcomeProgress`.
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 0 complete and validated.
-- Next step: Step 1 characterization tests after the Step 0 commit.
+- Status: Step 1 complete and validated.
+- Next step: Step 2 supervisor extraction and bounded tranche enforcement after the Step 1 commit.
 
 ## Update Rules
 
@@ -47,6 +47,10 @@
 - 2026-07-11: Reconciled progress tracking for the bounded-supervisor plan, recorded the clean baseline, preserved prior label-dispatch progress history, and confirmed `CHANGELOG.md` already satisfies the plan's top-level structure.
 - 2026-07-11: Step 0 validation passed: `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 73 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 0 Agentloop commit subject: `chore: initialize bounded-supervisor progress tracking`.
+- 2026-07-11: Step 1 characterized current stream termination semantics: SDK failure after `thread.started` saves the thread ID, records a failed zero-usage turn, and increments consecutive failures; a stream ending without `turn.completed` currently completes with zero usage; signal abort remains `cancelled`.
+- 2026-07-11: Step 1 added deterministic controlled stream and fake scheduler support for Step 2 deadline/stall tests, plus a SQLite v1 limits readability test.
+- 2026-07-11: Step 1 validation passed: targeted `bun test test/unit/foreground-run.test.ts test/unit/sqlite-run-store.test.ts --timeout 10000`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 76 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 1 Agentloop commit subject: `test: characterize bounded turn termination semantics`.
 
 ---
 

@@ -70,6 +70,24 @@ describe("SQLite run store", () => {
     database.close();
   });
 
+  test("reads version-1 run limit payloads without losing persisted policy", async () => {
+    const database = await openDatabase({ path: await tempDatabasePath() });
+    const store = new SqliteRunStore(database);
+    const version1Limits = {
+      ...DEFAULT_RUN_LIMITS,
+      eventStallWarningMs: 123_456,
+      maxOuterTurns: 3,
+    };
+
+    store.createRun(createRunInput({ id: "run-1", limits: version1Limits }));
+
+    const run = store.getRun("run-1");
+    expect(run?.limits.maxOuterTurns).toBe(3);
+    expect(run?.limits.eventStallWarningMs).toBe(123_456);
+    expect(run?.limits.leaseTtlMs).toBe(DEFAULT_RUN_LIMITS.leaseTtlMs);
+    database.close();
+  });
+
   test("rejects invalid state transitions without modifying the run", async () => {
     const database = await openDatabase({ path: await tempDatabasePath() });
     const store = new SqliteRunStore(database);
@@ -113,11 +131,11 @@ describe("SQLite run store", () => {
   });
 });
 
-function createRunInput(overrides: { id: string }) {
+function createRunInput(overrides: { id: string; limits?: typeof DEFAULT_RUN_LIMITS }) {
   return {
     approvalMode: "agent-approved" as const,
     id: overrides.id,
-    limits: DEFAULT_RUN_LIMITS,
+    limits: overrides.limits ?? DEFAULT_RUN_LIMITS,
     model: null,
     now: "2026-07-10T00:00:00.000Z",
     objective: "test objective",
