@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export function migrate(database: Database): void {
   applyPragmas(database);
@@ -26,11 +26,37 @@ export function migrate(database: Database): void {
         .run(1, new Date().toISOString());
     }
 
+    if (version < 2) {
+      applyMigration2(database);
+      database
+        .query("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)")
+        .run(2, new Date().toISOString());
+    }
+
     database.run("COMMIT");
   } catch (error) {
     database.run("ROLLBACK");
     throw error;
   }
+}
+
+function applyMigration2(database: Database): void {
+  database.run("ALTER TABLE turns ADD COLUMN abort_reason TEXT NULL");
+  database.run("ALTER TABLE turns ADD COLUMN usage_complete INTEGER NOT NULL DEFAULT 1");
+  database.run(`
+    CREATE TABLE checkpoints(
+      run_id TEXT NOT NULL REFERENCES runs(id),
+      sequence INTEGER NOT NULL,
+      turn_id TEXT NOT NULL REFERENCES turns(id),
+      status TEXT NOT NULL,
+      abort_reason TEXT NULL,
+      usage_complete INTEGER NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(run_id, sequence)
+    )
+  `);
+  database.run("CREATE INDEX checkpoints_turn_idx ON checkpoints(turn_id)");
 }
 
 export function applyPragmas(database: Database): void {

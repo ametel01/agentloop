@@ -69,6 +69,7 @@ export interface TurnRecord {
   turnNumber: number;
   kind: string;
   status: string;
+  abortReason: string | null;
   promptHash: string;
   startedAt: string;
   finishedAt: string | null;
@@ -76,7 +77,19 @@ export interface TurnRecord {
   fingerprintAfter: string | null;
   responseJson: string | null;
   usage: RunUsage;
+  usageComplete: boolean;
   errorJson: string | null;
+}
+
+export interface CheckpointRecord {
+  runId: RunId;
+  sequence: number;
+  turnId: string;
+  status: string;
+  abortReason: string | null;
+  usageComplete: boolean;
+  payload: unknown;
+  createdAt: string;
 }
 
 export interface EventRecord {

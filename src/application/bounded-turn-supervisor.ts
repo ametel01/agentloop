@@ -23,6 +23,7 @@ export type TrancheOutcome =
       finalText: string | null;
       status: "completed";
       usage: RunUsage;
+      usageComplete: boolean;
     }
   | {
       abortReason: TrancheAbortReason;
@@ -30,6 +31,7 @@ export type TrancheOutcome =
       finalText: string | null;
       status: "aborted";
       usage: RunUsage;
+      usageComplete: boolean;
     };
 
 export interface RunTrancheInput {
@@ -65,6 +67,7 @@ export class BoundedTurnSupervisor {
     const operatorAbort = this.operatorAbort(input.signal);
     let finalText: string | null = null;
     let usage = zeroUsage();
+    let usageComplete = false;
 
     const abort = (reason: Exclude<TrancheAbortReason, "sdk_failed">): TrancheOutcome => {
       abortController.abort(reason);
@@ -74,6 +77,7 @@ export class BoundedTurnSupervisor {
         finalText,
         status: "aborted",
         usage,
+        usageComplete,
       };
     };
 
@@ -125,11 +129,12 @@ export class BoundedTurnSupervisor {
             finalText,
             status: "aborted",
             usage,
+            usageComplete,
           };
         }
 
         if (raced.result.done === true) {
-          return { finalText, status: "completed", usage };
+          return { finalText, status: "completed", usage, usageComplete };
         }
 
         const event = raced.result.value;
@@ -138,6 +143,7 @@ export class BoundedTurnSupervisor {
 
         if (event.type === "turn.completed") {
           usage = mapUsage(event.usage);
+          usageComplete = true;
         }
 
         if (event.type === "turn.failed" || event.type === "error") {
@@ -147,6 +153,7 @@ export class BoundedTurnSupervisor {
             finalText,
             status: "aborted",
             usage,
+            usageComplete,
           };
         }
       }
@@ -161,6 +168,7 @@ export class BoundedTurnSupervisor {
         finalText,
         status: "aborted",
         usage,
+        usageComplete,
       };
     } finally {
       abortController.abort("tranche complete");

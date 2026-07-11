@@ -16,7 +16,7 @@
 - [x] Step 0: Progress and changelog tracking setup.
 - [x] Step 1: Characterize current turn, cancellation, and persistence semantics.
 - [x] Step 2: Introduce and enforce the `BoundedTurnSupervisor`.
-- [ ] Step 3: Persist typed checkpoints and complete usage state.
+- [x] Step 3: Persist typed checkpoints and complete usage state.
 - [ ] Step 4: Replace activity fingerprints with `OutcomeProgress`.
 - [ ] Step 5: Split compact checkpoints from final control messages.
 - [ ] Step 6: Bound hot context and enforce closure-first review policy.
@@ -32,8 +32,8 @@
 
 ## Current Status
 
-- Status: Step 2 complete and validated.
-- Next step: Step 3 durable typed checkpoints and usage completeness after the Step 2 commit.
+- Status: Step 3 complete and validated.
+- Next step: Step 4 outcome-based progress tracking after the Step 3 commit.
 
 ## Update Rules
 
@@ -55,6 +55,10 @@
 - 2026-07-11: Step 2 tests covered cooperative tranche continuation into a second turn, distinct event-stall and hard-deadline failures, current SDK failure/cancellation behavior, missing official usage characterization, and version-1 limits defaulting.
 - 2026-07-11: Step 2 validation passed: targeted `bun test test/unit/foreground-run.test.ts test/unit/sqlite-run-store.test.ts --timeout 10000`, `bun run format:check`, `bun run lint`, `bun run typecheck`, `bun run test`, `bun run build`, and `bun run verify`. Test summary: 80 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
 - 2026-07-11: Step 2 Agentloop commit subject: `feat: bound Codex work into supervised tranches`.
+- 2026-07-11: Step 3 added SQLite schema version 2 with turn `abort_reason` and `usage_complete` fields plus durable checkpoints, store create/list/latest checkpoint APIs, supervisor usage-completeness propagation, and status text/JSON checkpoint visibility.
+- 2026-07-11: Step 3 tests covered migration shape, checkpoint persistence, incomplete official usage, SDK-failure abort reasons, supervised abort checkpoints, and status rendering for latest checkpoint and turn usage completeness.
+- 2026-07-11: Step 3 validation passed: targeted `bun run typecheck && bun test test/unit/foreground-run.test.ts test/unit/sqlite-run-store.test.ts --timeout 10000` and final `bun run verify`. Test summary: 82 default tests passed, 1 opt-in live SDK smoke test skipped, build succeeded.
+- 2026-07-11: Step 3 Agentloop commit subject: `feat: persist supervised tranche checkpoints`.
 
 ---
 

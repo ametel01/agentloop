@@ -653,9 +653,16 @@ describe("foreground run", () => {
     });
     const run = JSON.parse(statusJson.join("")) as {
       consecutiveFailures: number;
+      latestCheckpoint: { abortReason: string | null; usageComplete: boolean } | null;
       status: string;
       threadId: string | null;
-      turns: Array<{ errorJson: string | null; status: string; usage: { inputTokens: number } }>;
+      turns: Array<{
+        abortReason: string | null;
+        errorJson: string | null;
+        status: string;
+        usage: { inputTokens: number };
+        usageComplete: boolean;
+      }>;
       turnsCompleted: number;
       usage: { inputTokens: number };
     };
@@ -666,8 +673,12 @@ describe("foreground run", () => {
     expect(run.turnsCompleted).toBe(0);
     expect(run.usage.inputTokens).toBe(0);
     expect(run.turns[0]?.status).toBe("failed");
+    expect(run.turns[0]?.abortReason).toBe("sdk_failed");
+    expect(run.turns[0]?.usageComplete).toBe(false);
     expect(run.turns[0]?.usage.inputTokens).toBe(0);
     expect(run.turns[0]?.errorJson).toContain("stream failed after durable thread");
+    expect(run.latestCheckpoint?.abortReason).toBe("sdk_failed");
+    expect(run.latestCheckpoint?.usageComplete).toBe(false);
   });
 
   test("characterizes missing official usage as a completed zero-usage turn", async () => {
@@ -689,8 +700,9 @@ describe("foreground run", () => {
       stderr: () => {},
     });
     const run = JSON.parse(statusJson.join("")) as {
+      latestCheckpoint: { usageComplete: boolean } | null;
       status: string;
-      turns: Array<{ status: string; usage: { inputTokens: number } }>;
+      turns: Array<{ status: string; usage: { inputTokens: number }; usageComplete: boolean }>;
       turnsCompleted: number;
       usage: { inputTokens: number; outputTokens: number; reasoningTokens: number };
     };
@@ -699,7 +711,9 @@ describe("foreground run", () => {
     expect(run.turnsCompleted).toBe(1);
     expect(run.usage).toMatchObject({ inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
     expect(run.turns[0]?.status).toBe("completed");
+    expect(run.turns[0]?.usageComplete).toBe(false);
     expect(run.turns[0]?.usage.inputTokens).toBe(0);
+    expect(run.latestCheckpoint?.usageComplete).toBe(false);
   });
 
   test("supervised cooperative tranche continues without cancellation or SDK failure", async () => {
@@ -733,8 +747,14 @@ describe("foreground run", () => {
     });
     const run = JSON.parse(statusJson.join("")) as {
       consecutiveFailures: number;
+      latestCheckpoint: { abortReason: string | null; usageComplete: boolean } | null;
       status: string;
-      turns: Array<{ errorJson: string | null; status: string }>;
+      turns: Array<{
+        abortReason: string | null;
+        errorJson: string | null;
+        status: string;
+        usageComplete: boolean;
+      }>;
       turnsCompleted: number;
     };
 
@@ -742,8 +762,12 @@ describe("foreground run", () => {
     expect(run.consecutiveFailures).toBe(0);
     expect(run.turnsCompleted).toBe(1);
     expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.abortReason).toBe("tranche_elapsed");
+    expect(run.turns[0]?.usageComplete).toBe(false);
     expect(run.turns[0]?.errorJson).toContain("tranche_elapsed");
     expect(run.turns[1]?.status).toBe("completed");
+    expect(run.latestCheckpoint?.abortReason).toBeNull();
+    expect(run.latestCheckpoint?.usageComplete).toBe(true);
   });
 
   test("supervised event stall records a distinct recoverable failure reason", async () => {
@@ -772,15 +796,25 @@ describe("foreground run", () => {
     const run = JSON.parse(statusJson.join("")) as {
       consecutiveFailures: number;
       lastError: string | null;
+      latestCheckpoint: { abortReason: string | null; usageComplete: boolean } | null;
       status: string;
-      turns: Array<{ errorJson: string | null; status: string }>;
+      turns: Array<{
+        abortReason: string | null;
+        errorJson: string | null;
+        status: string;
+        usageComplete: boolean;
+      }>;
     };
 
     expect(run.status).toBe("failed");
     expect(run.consecutiveFailures).toBe(1);
     expect(run.lastError).toContain("event_stalled");
     expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.abortReason).toBe("event_stalled");
+    expect(run.turns[0]?.usageComplete).toBe(false);
     expect(run.turns[0]?.errorJson).toContain("event_stalled");
+    expect(run.latestCheckpoint?.abortReason).toBe("event_stalled");
+    expect(run.latestCheckpoint?.usageComplete).toBe(false);
   });
 
   test("supervised hard deadline records a distinct failure reason", async () => {
@@ -808,14 +842,17 @@ describe("foreground run", () => {
     });
     const run = JSON.parse(statusJson.join("")) as {
       lastError: string | null;
+      latestCheckpoint: { abortReason: string | null } | null;
       status: string;
-      turns: Array<{ errorJson: string | null; status: string }>;
+      turns: Array<{ abortReason: string | null; errorJson: string | null; status: string }>;
     };
 
     expect(run.status).toBe("failed");
     expect(run.lastError).toContain("hard_deadline");
     expect(run.turns[0]?.status).toBe("aborted");
+    expect(run.turns[0]?.abortReason).toBe("hard_deadline");
     expect(run.turns[0]?.errorJson).toContain("hard_deadline");
+    expect(run.latestCheckpoint?.abortReason).toBe("hard_deadline");
   });
 
   test("maxConsecutiveTurnFailures stops a failed run before another SDK turn starts", async () => {
@@ -1103,10 +1140,11 @@ describe("foreground run", () => {
     });
     const status = JSON.parse(statusJson.join("")) as {
       heartbeatAgeMs: number | null;
+      latestCheckpoint: { status: string; usageComplete: boolean } | null;
       latestBlocker: unknown;
       lease: unknown;
       status: string;
-      turns: Array<{ kind: string; usage: { inputTokens: number } }>;
+      turns: Array<{ kind: string; usage: { inputTokens: number }; usageComplete: boolean }>;
       usage: { inputTokens: number };
     };
 
@@ -1115,6 +1153,9 @@ describe("foreground run", () => {
     expect(status.turns).toHaveLength(1);
     expect(status.turns[0]?.kind).toBe("initial");
     expect(status.turns[0]?.usage.inputTokens).toBe(10);
+    expect(status.turns[0]?.usageComplete).toBe(true);
+    expect(status.latestCheckpoint?.status).toBe("completed");
+    expect(status.latestCheckpoint?.usageComplete).toBe(true);
     expect(status.lease).toBeNull();
     expect(status.heartbeatAgeMs).toBeNull();
     expect(status.latestBlocker).toBeNull();
@@ -1125,6 +1166,8 @@ describe("foreground run", () => {
       stderr: () => {},
     });
     expect(statusText.join("")).toContain("harness.status: complete");
+    expect(statusText.join("")).toContain("checkpoint.latest: 1 completed usageComplete=true");
+    expect(statusText.join("")).toContain("turn.usageComplete: true");
     expect(statusText.join("")).toContain("turn.usage: input=10");
   });
 

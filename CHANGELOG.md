@@ -9,6 +9,7 @@ and this project adheres to Semantic Versioning.
 
 ### Added
 
+- Add durable tranche checkpoints with explicit turn abort reasons and usage-completeness markers.
 - Add bounded Codex tranche supervision with cooperative timeout, hard-deadline, and event-stall classification.
 - Add the label-scoped `dispatch` command for idempotent scheduled polling, dry runs, no-ready-issue no-ops, and already-active run detection.
 - Add `bun run install:global` for rebuilding and globally linking the local Agentloop checkout.

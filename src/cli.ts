@@ -27,6 +27,7 @@ import { AgentloopError, CliUsageError, OpenRunConflictError } from "./domain/er
 import {
   DEFAULT_RUN_LIMITS,
   type ApprovalRequest,
+  type CheckpointRecord,
   type EventRecord,
   type LeaseRecord,
   type RunLimits,
@@ -675,6 +676,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
 
   let finalText: string | null = null;
   let usage: RunUsage = zeroUsage();
+  let usageComplete = false;
 
   try {
     const runner = dependencies.codexRunner ?? new ProductionCodexRunner();
@@ -724,6 +726,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
 
     finalText = outcome.finalText;
     usage = outcome.usage;
+    usageComplete = outcome.usageComplete;
 
     if (outcome.status === "aborted") {
       if (outcome.abortReason === "sdk_failed") {
@@ -731,6 +734,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       }
 
       store.completeTurn({
+        abortReason: outcome.abortReason,
         errorJson: JSON.stringify({
           message: outcome.errorMessage,
           reason: outcome.abortReason,
@@ -741,6 +745,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
         responseJson: finalText,
         status: outcome.abortReason === "operator_cancelled" ? "cancelled" : "aborted",
         usage,
+        usageComplete,
       });
       const latestRun = requireRun(store, run.id);
       const consecutiveFailures = shouldCountTrancheFailure(outcome.abortReason)
@@ -752,6 +757,19 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
         noProgressCount: latestRun.noProgressCount,
         now: clock.now().toISOString(),
         stateFingerprint: latestRun.stateFingerprint ?? "",
+      });
+      createTurnCheckpoint({
+        abortReason: outcome.abortReason,
+        clock,
+        payload: {
+          nextStatus: trancheAbortStatus(outcome.abortReason),
+          summary: outcome.errorMessage,
+        },
+        runId: run.id,
+        status: outcome.abortReason === "operator_cancelled" ? "cancelled" : "aborted",
+        store,
+        turnId,
+        usageComplete,
       });
 
       return store.transitionRun({
@@ -769,6 +787,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
 
     const envelope = parseControlEnvelope(finalText);
     store.completeTurn({
+      abortReason: null,
       errorJson: null,
       fingerprintAfter: null,
       finishedAt: clock.now().toISOString(),
@@ -776,6 +795,20 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       responseJson: redactText(finalText),
       status: "completed",
       usage,
+      usageComplete,
+    });
+    createTurnCheckpoint({
+      abortReason: null,
+      clock,
+      payload: {
+        envelopeStatus: envelope.status,
+        summary: redactText(envelope.summary),
+      },
+      runId: run.id,
+      status: "completed",
+      store,
+      turnId,
+      usageComplete,
     });
     const updatedRun = store.updateUsage({
       id: run.id,
@@ -854,6 +887,7 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
   } catch (error) {
     const message = redactText(error instanceof Error ? error.message : String(error));
     store.completeTurn({
+      abortReason: signal.aborted ? "operator_cancelled" : "sdk_failed",
       errorJson: JSON.stringify({ message }),
       fingerprintAfter: null,
       finishedAt: clock.now().toISOString(),
@@ -861,6 +895,20 @@ async function executeSingleTurn(input: ExecuteSingleTurnInput): Promise<RunReco
       responseJson: finalText,
       status: signal.aborted ? "cancelled" : "failed",
       usage,
+      usageComplete,
+    });
+    createTurnCheckpoint({
+      abortReason: signal.aborted ? "operator_cancelled" : "sdk_failed",
+      clock,
+      payload: {
+        nextStatus: signal.aborted ? "cancelled" : "failed",
+        summary: message,
+      },
+      runId: run.id,
+      status: signal.aborted ? "cancelled" : "failed",
+      store,
+      turnId,
+      usageComplete,
     });
     const latestRun = requireRun(store, run.id);
     store.updateProgress({
@@ -1018,6 +1066,27 @@ function zeroUsage(): RunUsage {
     outputTokens: 0,
     reasoningTokens: 0,
   };
+}
+
+function createTurnCheckpoint(input: {
+  abortReason: string | null;
+  clock: Clock;
+  payload: unknown;
+  runId: string;
+  status: string;
+  store: SqliteRunStore;
+  turnId: string;
+  usageComplete: boolean;
+}): void {
+  input.store.createCheckpoint({
+    abortReason: input.abortReason,
+    createdAt: input.clock.now().toISOString(),
+    payloadJson: redactJson(input.payload),
+    runId: input.runId,
+    status: input.status,
+    turnId: input.turnId,
+    usageComplete: input.usageComplete,
+  });
 }
 
 async function resumeCommand(
@@ -1612,9 +1681,11 @@ function renderRunList(runs: readonly RunRecord[]): string {
 interface RunStatusDocument extends RunRecord {
   pendingApprovals: ApprovalRequest[];
   turns: TurnRecord[];
+  checkpoints: CheckpointRecord[];
   lease: LeaseRecord | null;
   heartbeatAgeMs: number | null;
   latestBlocker: unknown;
+  latestCheckpoint: CheckpointRecord | null;
 }
 
 function buildRunStatus(store: SqliteRunStore, run: RunRecord, clock: Clock): RunStatusDocument {
@@ -1623,7 +1694,9 @@ function buildRunStatus(store: SqliteRunStore, run: RunRecord, clock: Clock): Ru
     ...run,
     heartbeatAgeMs:
       lease === null ? null : Math.max(0, clock.now().getTime() - Date.parse(lease.heartbeatAt)),
+    checkpoints: store.listCheckpoints(run.id),
     latestBlocker: latestBlocker(store.listTurns(run.id)),
+    latestCheckpoint: store.getLatestCheckpoint(run.id),
     lease,
     pendingApprovals: store.listPendingApprovals(run.id),
     turns: store.listTurns(run.id),
@@ -1646,6 +1719,12 @@ function renderRunStatus(status: RunStatusDocument): string {
     `noProgressCount: ${status.noProgressCount}`,
     `consecutiveFailures: ${status.consecutiveFailures}`,
     `lastError: ${status.lastError ?? "none"}`,
+    `checkpoint.latest: ${
+      status.latestCheckpoint === null
+        ? "none"
+        : `${status.latestCheckpoint.sequence} ${status.latestCheckpoint.status} usageComplete=${status.latestCheckpoint.usageComplete}`
+    }`,
+    `checkpoint.abortReason: ${status.latestCheckpoint?.abortReason ?? "none"}`,
     `latestBlocker: ${status.latestBlocker === null ? "none" : JSON.stringify(status.latestBlocker)}`,
     `lease.owner: ${status.lease?.ownerId ?? "none"}`,
     `lease.expiresAt: ${status.lease?.expiresAt ?? "none"}`,
@@ -1660,6 +1739,8 @@ function renderRunStatus(status: RunStatusDocument): string {
       `turn.id: ${turn.id}`,
       `turn.kind: ${turn.kind}`,
       `turn.status: ${turn.status}`,
+      `turn.abortReason: ${turn.abortReason ?? "none"}`,
+      `turn.usageComplete: ${turn.usageComplete}`,
       `turn.usage: input=${turn.usage.inputTokens} cached=${turn.usage.cachedInputTokens} output=${turn.usage.outputTokens} reasoning=${turn.usage.reasoningTokens}`,
     );
   }

@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { OpenRunConflictError, StateConflictError } from "../../domain/errors.ts";
 import type {
   ApprovalRequest,
+  CheckpointRecord,
   CreateRunInput,
   EventRecord,
   LeaseRecord,
@@ -74,6 +75,9 @@ export interface RunStore {
   updateUsage(input: UpdateUsageInput): RunRecord;
   createTurn(input: CreateTurnInput): TurnRecord;
   completeTurn(input: CompleteTurnInput): TurnRecord;
+  createCheckpoint(input: CreateCheckpointInput): CheckpointRecord;
+  getLatestCheckpoint(runId: string): CheckpointRecord | null;
+  listCheckpoints(runId: string): CheckpointRecord[];
   appendEvent(input: AppendEventInput): EventRecord;
   recordThreadStarted(input: RecordThreadStartedInput): EventRecord;
   createApproval(input: CreateApprovalInput): ApprovalRequest;
@@ -127,11 +131,23 @@ export interface CreateTurnInput {
 export interface CompleteTurnInput {
   id: string;
   status: string;
+  abortReason: string | null;
   finishedAt: string;
   fingerprintAfter: string | null;
   responseJson: string | null;
   usage: RunUsage;
+  usageComplete: boolean;
   errorJson: string | null;
+}
+
+export interface CreateCheckpointInput {
+  runId: string;
+  turnId: string;
+  status: string;
+  abortReason: string | null;
+  usageComplete: boolean;
+  payloadJson: string;
+  createdAt: string;
 }
 
 export interface AppendEventInput {
@@ -526,6 +542,7 @@ export class SqliteRunStore implements RunStore {
         `
         UPDATE turns
         SET status = ?,
+            abort_reason = ?,
             finished_at = ?,
             fingerprint_after = ?,
             response_json = ?,
@@ -533,12 +550,14 @@ export class SqliteRunStore implements RunStore {
             cached_input_tokens = ?,
             output_tokens = ?,
             reasoning_tokens = ?,
+            usage_complete = ?,
             error_json = ?
         WHERE id = ?
       `,
       )
       .run(
         input.status,
+        input.abortReason,
         input.finishedAt,
         input.fingerprintAfter,
         input.responseJson,
@@ -546,6 +565,7 @@ export class SqliteRunStore implements RunStore {
         input.usage.cachedInputTokens,
         input.usage.outputTokens,
         input.usage.reasoningTokens,
+        input.usageComplete ? 1 : 0,
         input.errorJson,
         input.id,
       );
@@ -558,6 +578,87 @@ export class SqliteRunStore implements RunStore {
     }
 
     return mapTurn(row);
+  }
+
+  createCheckpoint(input: CreateCheckpointInput): CheckpointRecord {
+    this.database.run("BEGIN IMMEDIATE");
+    try {
+      const last = this.database
+        .query<{ sequence: number }, [string]>(
+          "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM checkpoints WHERE run_id = ?",
+        )
+        .get(input.runId);
+      const sequence = (last?.sequence ?? 0) + 1;
+
+      this.database
+        .query(
+          `
+          INSERT INTO checkpoints(
+            run_id,
+            sequence,
+            turn_id,
+            status,
+            abort_reason,
+            usage_complete,
+            payload_json,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          input.runId,
+          sequence,
+          input.turnId,
+          input.status,
+          input.abortReason,
+          input.usageComplete ? 1 : 0,
+          input.payloadJson,
+          input.createdAt,
+        );
+
+      this.database.run("COMMIT");
+      return {
+        abortReason: input.abortReason,
+        createdAt: input.createdAt,
+        payload: JSON.parse(input.payloadJson),
+        runId: input.runId,
+        sequence,
+        status: input.status,
+        turnId: input.turnId,
+        usageComplete: input.usageComplete,
+      };
+    } catch (error) {
+      this.database.run("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getLatestCheckpoint(runId: string): CheckpointRecord | null {
+    const row = this.database
+      .query<CheckpointRow, [string]>(
+        `
+        SELECT * FROM checkpoints
+        WHERE run_id = ?
+        ORDER BY sequence DESC
+        LIMIT 1
+      `,
+      )
+      .get(runId);
+
+    return row === null ? null : mapCheckpoint(row);
+  }
+
+  listCheckpoints(runId: string): CheckpointRecord[] {
+    return this.database
+      .query<CheckpointRow, [string]>(
+        `
+        SELECT * FROM checkpoints
+        WHERE run_id = ?
+        ORDER BY sequence ASC
+      `,
+      )
+      .all(runId)
+      .map(mapCheckpoint);
   }
 
   appendEvent(input: AppendEventInput): EventRecord {
@@ -843,6 +944,7 @@ interface TurnRow {
   turn_number: number;
   kind: string;
   status: string;
+  abort_reason: string | null;
   prompt_hash: string;
   started_at: string;
   finished_at: string | null;
@@ -853,7 +955,19 @@ interface TurnRow {
   cached_input_tokens: number;
   output_tokens: number;
   reasoning_tokens: number;
+  usage_complete: number;
   error_json: string | null;
+}
+
+interface CheckpointRow {
+  run_id: string;
+  sequence: number;
+  turn_id: string;
+  status: string;
+  abort_reason: string | null;
+  usage_complete: number;
+  payload_json: string;
+  created_at: string;
 }
 
 interface EventRow {
@@ -917,6 +1031,7 @@ function mapTurn(row: TurnRow): TurnRecord {
     runId: row.run_id,
     responseJson: row.response_json,
     turnNumber: row.turn_number,
+    abortReason: row.abort_reason,
     kind: row.kind,
     status: row.status,
     promptHash: row.prompt_hash,
@@ -928,6 +1043,20 @@ function mapTurn(row: TurnRow): TurnRecord {
       outputTokens: row.output_tokens,
       reasoningTokens: row.reasoning_tokens,
     },
+    usageComplete: row.usage_complete === 1,
+  };
+}
+
+function mapCheckpoint(row: CheckpointRow): CheckpointRecord {
+  return {
+    abortReason: row.abort_reason,
+    createdAt: row.created_at,
+    payload: JSON.parse(row.payload_json),
+    runId: row.run_id,
+    sequence: row.sequence,
+    status: row.status,
+    turnId: row.turn_id,
+    usageComplete: row.usage_complete === 1,
   };
 }
 

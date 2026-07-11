@@ -31,6 +31,25 @@ describe("SQLite run store", () => {
     expect(version?.version).toBe(CURRENT_SCHEMA_VERSION);
   });
 
+  test("migration version 2 adds turn usage completeness and checkpoints", async () => {
+    const database = await openDatabase({ path: await tempDatabasePath() });
+
+    const turnColumns = database
+      .query<{ name: string }, []>("PRAGMA table_info(turns)")
+      .all()
+      .map((column) => column.name);
+    const checkpointTable = database
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'checkpoints'",
+      )
+      .get();
+
+    expect(turnColumns).toContain("abort_reason");
+    expect(turnColumns).toContain("usage_complete");
+    expect(checkpointTable?.name).toBe("checkpoints");
+    database.close();
+  });
+
   test("sets restrictive directory and database permissions", async () => {
     const databasePath = await tempDatabasePath();
     const database = await openDatabase({ path: databasePath });
@@ -112,6 +131,51 @@ describe("SQLite run store", () => {
       }),
     ).toThrow(StateConflictError);
     expect(store.getRun("run-1")?.status).toBe("queued");
+    database.close();
+  });
+
+  test("persists checkpoints and incomplete turn usage state", async () => {
+    const database = await openDatabase({ path: await tempDatabasePath() });
+    const store = new SqliteRunStore(database);
+    store.createRun(createRunInput({ id: "run-1" }));
+    store.createTurn({
+      fingerprintBefore: null,
+      id: "turn-1",
+      kind: "initial",
+      promptHash: "prompt-hash",
+      runId: "run-1",
+      startedAt: "2026-07-10T00:00:00.000Z",
+      status: "running",
+      turnNumber: 1,
+    });
+    store.completeTurn({
+      abortReason: "event_stalled",
+      errorJson: JSON.stringify({ message: "stalled" }),
+      fingerprintAfter: null,
+      finishedAt: "2026-07-10T00:00:01.000Z",
+      id: "turn-1",
+      responseJson: null,
+      status: "aborted",
+      usage: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0 },
+      usageComplete: false,
+    });
+
+    const checkpoint = store.createCheckpoint({
+      abortReason: "event_stalled",
+      createdAt: "2026-07-10T00:00:01.000Z",
+      payloadJson: JSON.stringify({ summary: "stalled" }),
+      runId: "run-1",
+      status: "aborted",
+      turnId: "turn-1",
+      usageComplete: false,
+    });
+
+    expect(checkpoint.sequence).toBe(1);
+    expect(checkpoint.usageComplete).toBe(false);
+    expect(store.listTurns("run-1")[0]?.usageComplete).toBe(false);
+    expect(store.listTurns("run-1")[0]?.abortReason).toBe("event_stalled");
+    expect(store.getLatestCheckpoint("run-1")?.abortReason).toBe("event_stalled");
+    expect(store.listCheckpoints("run-1")).toHaveLength(1);
     database.close();
   });
 
