@@ -27,6 +27,7 @@ and this project adheres to Semantic Versioning.
 
 ### Fixed
 
+- Make `bun run install:global` replace broken Bun global links with a verified direct `agentloop` binary symlink.
 - Make approval and blocker control-envelope fields valid strict Structured Outputs schemas.
 
 ### Security

@@ -1,5 +1,14 @@
 import { existsSync } from "node:fs";
-import { appendFile, readFile } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  readlink,
+  symlink,
+  unlink,
+} from "node:fs/promises";
 import { delimiter, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,7 +40,7 @@ async function installGlobal(options: InstallOptions): Promise<void> {
 
   await run(["bun", "run", "build"], options);
   await run(["bun", "link"], options);
-  await run(["bun", "link", "-g", "agentloop"], options);
+  await linkAgentloopBinary(globalBin, options);
 
   const profile = resolveProfile(process.env);
   const currentPathHasGlobalBin = pathIncludes(process.env.PATH ?? "", globalBin);
@@ -123,6 +132,70 @@ async function run(command: string[], options: InstallOptions): Promise<void> {
   if (exitCode !== 0) {
     throw new Error(`Command failed with exit code ${exitCode}: ${command.join(" ")}`);
   }
+}
+
+async function linkAgentloopBinary(globalBin: string, options: InstallOptions): Promise<void> {
+  const target = `${repoRoot}dist/cli.js`;
+  const linkPath = `${globalBin}/agentloop`;
+
+  if (options.dryRun) {
+    console.log(`Would link ${linkPath} -> ${target}`);
+    return;
+  }
+
+  if (!existsSync(target)) {
+    throw new Error(`Expected built CLI at ${target}`);
+  }
+
+  await mkdir(globalBin, { recursive: true, mode: 0o755 });
+  await chmod(target, 0o755);
+  await replaceSymlink(linkPath, target);
+  await verifySymlink(linkPath, target);
+}
+
+async function replaceSymlink(linkPath: string, target: string): Promise<void> {
+  try {
+    const current = await lstat(linkPath);
+    if (current.isSymbolicLink()) {
+      const currentTarget = await readlink(linkPath);
+      if (currentTarget === target) {
+        return;
+      }
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+
+  await unlinkIfExists(linkPath);
+  await symlink(target, linkPath);
+}
+
+async function unlinkIfExists(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function verifySymlink(linkPath: string, target: string): Promise<void> {
+  const stat = await lstat(linkPath);
+  if (!stat.isSymbolicLink()) {
+    throw new Error(`${linkPath} exists but is not a symlink`);
+  }
+
+  const actualTarget = await readlink(linkPath);
+  if (actualTarget !== target) {
+    throw new Error(`${linkPath} points to ${actualTarget}, expected ${target}`);
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function resolveProfile(env: NodeJS.ProcessEnv): string | null {
