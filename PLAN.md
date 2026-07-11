@@ -2,172 +2,147 @@
 
 ## Source Documents
 
-- Path: Inline design brief supplied in the current planning task
-  - Role: Primary product and workflow brief.
-  - Summary: Defines a two-stage software factory boundary, with discovery producing GitHub issues and implementation beginning only after a human applies `agentloop:ready`. Requires one repository-level dispatcher, GitHub-visible claims, exact issue scoping, idempotent checks, and deferred discovery producers.
-- Path: <https://x.com/piersonmarks/status/2075361336381555096>
-  - Role: External design inspiration.
-  - Summary: Separates pre-triage from implementation, uses the issue tracker as the interface, and uses a label as an explicit automation trigger.
+- Path: `/private/tmp/agentloop-architecture-review-2026-07-10.html`
+  - Role: Primary architecture review and implementation brief.
+  - Summary: Diagnoses unbounded Codex turns, activity-based progress detection, verbose control envelopes, oversized hot ledgers, throughput-first scheduling, and repeated exact-head evidence collection. Recommends a bounded-turn supervisor first, followed by outcome progress, compact checkpoint/final messages, context limits, closure-first skill policy, and exact-head evidence reuse.
 - Path: `/Users/alexmetelli/source/agentloop/AGENTS.md`
   - Role: Repository implementation constraints.
-  - Summary: Requires Bun, strict TypeScript, fake-backed default tests, explicit repository trust, no credential persistence, and a thin harness around installed Codex skills.
+  - Summary: Requires Bun, strict TypeScript, `bun run verify`, offline fake-backed default tests, explicit repository trust, credential-safe persistence, and a thin harness around installed skills.
 - Path: `/Users/alexmetelli/source/agentloop/docs/architecture.md`
-  - Role: Harness ownership boundary.
-  - Summary: Assigns durable execution, leases, budgets, events, and recovery to Agentloop while leaving issue and role semantics to installed skills.
-- Path: `/Users/alexmetelli/source/agentloop/README.md`
-  - Role: Current CLI and operator contract.
-  - Summary: Documents run creation, detached queueing, worker execution, model selection, recovery, approvals, and existing operator commands.
+  - Role: Existing harness ownership boundary.
+  - Summary: Assigns durable runs, limits, events, leases, recovery, and state transitions to Agentloop while reserving issue/PR workflow semantics and role behavior for installed skills.
 - Path: `/Users/alexmetelli/source/agentloop/docs/operations.md`
-  - Role: Local supervision and recovery contract.
-  - Summary: Defines worker supervision, `launchd` integration, state paths, stale-lease behavior, and incident recovery.
-- Path: `/Users/alexmetelli/source/agentloop/docs/security.md`
-  - Role: Trust, credential, persistence, and subprocess constraints.
-  - Summary: Requires structured command arguments, least-privilege host credentials, explicit trust, best-effort redaction, and no secret persistence.
+  - Role: Existing operator and recovery contract.
+  - Summary: Defines state paths, foreground and worker behavior, current budgets, event output, stale-lease recovery, and incident handling that the bounded-turn design must preserve.
 - Path: `/Users/alexmetelli/.agents/skills/codex-dev-team-goal/SKILL.md`
-  - Role: Coordinator and issue-to-merge workflow contract.
-  - Summary: Owns live GitHub intake, dependency routing, worktree isolation, builder/checker/reviewer loops, merge acceptance, reconciliation, and closure evidence.
-- Path: `/Users/alexmetelli/.agents/skills/codex-dev-team-goal/references/sub-agent-prompts.md`
-  - Role: Role boundary reference.
-  - Summary: Keeps spec, builder, checker, reviewer, and retrospective behavior in installed skills rather than Agentloop TypeScript.
+  - Role: Installed coordinator policy affected by the review.
+  - Summary: Owns issue-to-merge scheduling, review cycles, closure gates, and hot `STATUS.md` discipline; it must carry closure-first and bounded-ledger policy instead of duplicating those semantics in TypeScript.
+- Path: `/Users/alexmetelli/.agents/skills/team-coordinator/SKILL.md`
+  - Role: Supporting scheduling policy.
+  - Summary: Currently favors parallel saturation and tracks cycle counts; it needs a compatible nearest-to-merge reservation and speculative-stream limit.
+- Path: `/Users/alexmetelli/.agents/skills/agent-team-status-protocol/SKILL.md`
+  - Role: Supporting hot-state policy.
+  - Summary: Defines `STATUS.md` as concise hot team memory and `STATUS.archive.md` as cold history; it is the semantic home for sharding and compaction rules.
 
 ## Goals
 
-- Add an operator-controlled `agentloop dispatch` command that discovers open GitHub issues labeled `agentloop:ready` and queues one exact, repository-level Agentloop run for that issue set.
-- Make repeated scheduled dispatch attempts idempotent: no ready issues and an already-open repository run are successful no-op outcomes, not duplicate work or alert-worthy failures.
-- Keep the durable objective narrow and safe by persisting only the repository identity and sorted issue numbers/URLs, never issue titles, bodies, comments, telemetry, or customer data.
-- Expose the Agentloop run ID to the coordinator so GitHub claim comments and labels can be tied to a durable run.
-- Add an installed-skill claim protocol that publishes `agentloop:running` and `agentloop:blocked` state, reuses existing PRs and same-run claims, and refuses to take work claimed by another run.
-- Preserve one coordinator per repository; the coordinator continues to own dependency analysis and safe parallel builders within separate worktrees.
-- Document a simple polling deployment using the existing worker and `launchd`, without adding an HTTP service or scheduler to Agentloop.
+- Bound every Codex outer turn to a cooperative tranche of at most 10 minutes, with a separate hard deadline and event-stall deadline that are enforced while the stream is open.
+- Convert tranche expiry, stream stall, operator cancellation, SDK failure, budget exhaustion, and review-cycle exhaustion into distinct typed outcomes with safe durable transitions.
+- Persist a checkpoint after every tranche so official usage, usage completeness, active-agent deltas, material outcomes, blockers, and the next action are regularly visible.
+- Replace activity fingerprints with durable outcome progress: pushed commits, PR creation/advancement/merge, issue closure, resolved review findings, and newly classified blockers.
+- Ensure tracker edits, dirty files, repeated commands, broad GitHub timestamps, and unchanged agent snapshots do not reset no-progress detection.
+- Split compact checkpoint messages from final closure envelopes, deduplicate unchanged roster snapshots, and require full closure evidence only for final completion.
+- Keep hot coordination state bounded and local: detect an oversized `STATUS.md`, direct compaction/sharding before new assignment, and pass agents the owned shard rather than repeated broad ledger reads.
+- Make closure-first scheduling explicit in installed skills and prevent a configured review-cycle cap from silently rolling into another cycle.
+- Reuse exact-head evidence only under strict SHA or stable-patch, relevant-input, environment, and gate-version equivalence.
+- Expose operator ratios for tokens, elapsed time, and review cycles per material outcome without adding telemetry services or new default network calls.
 
 ## Non-Goals
 
-- Do not implement system-health, UX-feedback, churn-analysis, `improve`, Hallmark, security, or other discovery producers in this plan.
-- Do not let discovery agents apply `agentloop:ready` or otherwise authorize implementation.
-- Do not add a public webhook receiver, Hono service, hosted control plane, cloud routine integration, or network daemon.
-- Do not start one Agentloop run per issue; one repository-level run must drain the exact ready set and coordinate internal parallelism.
-- Do not make label names configurable in the first slice. Use `agentloop:ready`, `agentloop:running`, and `agentloop:blocked` as the fixed protocol.
-- Do not automatically create repository labels. Missing protocol labels must fail dispatch preflight with exact setup guidance.
-- Do not add a completion label. Successful PR closing references and closed GitHub issues remain the completion signal.
-- Do not persist issue titles, bodies, comments, customer PII, session replay contents, payment data, provider credentials, full authentication output, or process environments.
-- Do not provide distributed or cross-host claim consensus. The first slice remains single-host and relies on the existing repository singleton plus GitHub-visible advisory claims.
-- Do not install a `launchd` service, publish a package, deploy infrastructure, release a version, or run production discovery automatically.
+- Do not copy installed skill bodies, coordinator policy, role prompts, GitHub workflow logic, or issue semantics into Agentloop TypeScript.
+- Do not replace the Codex SDK, build a hosted control plane, add a daemon beyond the existing worker, or add model/GitHub/network calls to default tests.
+- Do not estimate missing official token usage from text size and present it as official usage. Aborted or incomplete usage must be marked incomplete.
+- Do not treat command count, file dirtiness, `STATUS.md` edits, worktree creation, PR `updatedAt`, or issue `updatedAt` as material outcomes.
+- Do not cache final merge acceptance, human approvals, secrets, process environments, full command output, full authentication output, or mutable hosted state without exact equivalence inputs.
+- Do not make Agentloop parse or own the internal prose format of `STATUS.md`; the harness may measure size/line count and carry shard paths supplied through typed control messages.
+- Do not automatically rewrite or delete a target repository's oversized ledger. Compaction and sharding remain coordinator actions under installed-skill policy.
+- Do not publish packages, deploy services, run production goals, migrate target repositories, or modify unrelated user changes in the current dirty worktree.
 
 ## Definition of Done
 
-- The built CLI documents and accepts:
-
-  ```text
-  agentloop dispatch --repo PATH --trust-repo [--dry-run] [--json]
-    [--model MODEL] [--reasoning EFFORT]
-    [--approval-mode agent-approved|human-merge]
-    [--max-turns N] [--max-tokens N] [--max-duration DURATION]
-  ```
-
-- `dispatch` runs the existing doctor/trust preflight, confirms all three protocol labels exist, and reads open `agentloop:ready` issues through structured `gh` arguments with a bounded timeout.
-- Issue discovery returns a deterministic, deduplicated, ascending issue-number set. A configured collection cap cannot silently truncate work; reaching it fails with an actionable message.
-- `--dry-run` performs no SQLite or GitHub mutation and reports the exact issue numbers that would be queued.
-- Normal dispatch never invokes Codex directly. It creates one `queued` run for the existing worker, using the same model, reasoning, approval, limit, skill-fingerprint, worktree-root, and repository-key contracts as `run --detach`.
-- With no ready issues, dispatch exits successfully, creates no run, and reports `no_ready_issues`.
-- With an existing open repository run, dispatch exits successfully, creates no second run, and reports `already_active` with the existing run ID. A concurrent create race resolves to this same no-op result through the existing unique-open-run constraint.
-- Text and JSON output are stable. JSON includes `status`, `runId`, `repoPath`, and `issueNumbers`, where status is one of `dry_run`, `queued`, `no_ready_issues`, or `already_active`.
-- The queued objective contains only the exact sorted issue references and an immutable scope marker; issue titles/bodies are fetched later by the coordinator and are not persisted in the run objective.
-- Every coordinator prompt includes the durable Agentloop run ID.
-- The installed `codex-dev-team-goal` skill contains a label-scoped dispatch protocol that:
-  - Re-fetches each dispatched issue and linked/open PR state before assignment.
-  - Skips closed issues without creating work.
-  - Reuses an existing PR rather than spawning a duplicate builder.
-  - Treats a same-run claim marker as recovery state and continues idempotently.
-  - Refuses to mutate or implement an issue claimed by a different run.
-  - Writes a stable `[agentloop run:<RUN_ID>]` claim comment, adds `agentloop:running`, and removes `agentloop:ready` in a recoverable order.
-  - Allows inspection of linked blockers and PRs only to determine routing, but does not modify or implement issues outside the dispatched set.
-  - Uses `agentloop:blocked` only for terminal human/external blockers, removes `agentloop:running`, and records exact evidence and the next decision.
-  - Removes transient dispatch labels when the issue closes through the intended merged PR.
-- Agentloop TypeScript contains no copied role prompt or GitHub label mutation policy; semantic claim behavior remains in the installed skill.
-- Default tests use fake command, filesystem, clock, ID, Codex, and SQLite adapters. They perform no live GitHub writes, model calls, network calls, label changes, or process-environment persistence.
-- Tests cover trust failure, missing labels, no work, deterministic discovery, malformed/truncated GitHub output, dry run, queue creation, stable JSON/text output, an already-open run, a concurrent create race, exact objective scoping, and prompt run-ID propagation.
-- README, architecture, operations, and security docs explain the label protocol, queue/worker split, polling setup, no-op states, claim recovery, skill-fingerprint impact, and deferred producer boundary.
-- Existing runs remain compatible. No database migration is introduced unless implementation proves that existing run fields cannot safely represent dispatch; any such need must stop the goal for plan revision rather than silently expanding scope.
-- `bun run verify` passes from `/Users/alexmetelli/source/agentloop`; `bun audit` reports no unresolved dependency vulnerabilities; the installed skill JSON/eval files validate; and both repositories have clean, intentional diffs with unrelated changes preserved.
-- `PROGRESS.md` and `CHANGELOG.md` are current. The Agentloop changelog has one `## [Unreleased]` section with each change category appearing at most once.
+- `executeSingleTurn` no longer owns timing, stream observation, abort classification, checkpoint persistence, and transition policy in one CLI function. A deep `BoundedTurnSupervisor` interface owns those responsibilities and returns a typed tranche outcome.
+- Default policy uses a 10-minute cooperative tranche, a slightly longer hard turn deadline, and an event-stall deadline. Persisted policies are validated, old version-1 run rows receive safe defaults when read, and operators can inspect the effective limits.
+- An endless fake stream ends as `continuing` at tranche expiry; an event-stalled fake stream ends with a distinct recoverable stall reason; Ctrl-C remains `cancelled`; true SDK failures remain failures.
+- `maxConsecutiveTurnFailures` is enforced before another turn starts. A tranche timeout or controlled stall does not consume the operator-cancellation path or masquerade as an SDK failure.
+- Each bounded completion persists a checkpoint and a usage-completeness marker. Official SDK usage is recorded when emitted; interrupted turns explicitly report incomplete/unavailable usage instead of durable zero usage.
+- Progress observation produces typed `OutcomeDelta` records. One pushed SHA or one resolved review finding creates exactly one useful outcome; idempotent re-observation creates none.
+- `STATUS.md`-only edits, dirty worktree changes, repeated commands/checks, worktree-list churn, and timestamp-only GitHub changes do not reset `noProgressCount`.
+- No-progress uses time since the last useful outcome plus bounded-turn counts, and preserves fail-closed behavior when required outcome sources are unavailable.
+- Control messages form a strict discriminated `checkpoint | final` union. Checkpoints carry only changed roster entries, material outcomes, blocker/approval changes, review-cycle state, next action, and optional owned status shard. Final messages alone carry complete closure evidence.
+- Identical checkpoint snapshots are deduplicated. The last agent message is no longer blindly accepted as final; completion requires a valid `final` message, while valid checkpoints remain durable observations.
+- An oversized hot ledger (more than 200 lines or 64 KiB by default) produces a clear compaction/sharding instruction before further assignment. `STATUS.md` remains a compact index and per-stream detail can live under `STATUS.d/<issue-or-pr>.md`.
+- Installed coordinator/status skills reserve one agent slot for the nearest-to-merge PR, allow at most one speculative stream while a PR is blocked, open a draft PR after the first pushed focused-gate-green commit, batch a complete finding set per head, and stop at the configured review-cycle cap.
+- The harness rejects or stops advancement when typed checkpoint state would enter review cycle `N+1` after the configured cap; it records the exact PR/cycle evidence and next required decision.
+- Exact-head evidence is reused only when head SHA or stable patch ID, relevant-input digest, environment fingerprint, and gate version all match. Product-code changes invalidate affected evidence; docs/tracker-only changes may reuse unaffected evidence only when the declared input set proves that equivalence.
+- Failure signatures for external/configuration blockers are reusable under the same strict keys, so the same known blocker is not rediscovered every tranche.
+- `status` text/JSON exposes last useful outcome, checkpoint age, usage completeness, outcome counts, review-cycle counts, and tokens/time/cycles per outcome while redacting sensitive data.
+- SQLite migration is transactional and backward compatible. Existing version-1 databases migrate without losing runs, turns, events, approvals, or leases; newer unknown schemas still fail closed.
+- Default tests use fake Codex, commands, filesystem, clock/scheduler, IDs, and SQLite. They make no live GitHub, model, or network calls and cover deadlines, stalls, cancellation, failure caps, outcome idempotency, message parsing/deduplication, ledger limits, review caps, migration, cache invalidation, redaction, and existing run recovery.
+- README, architecture, operations, and security documentation explain tranche semantics, typed aborts, incomplete usage, outcome progress, ledger limits/shards, closure-first scheduling, evidence reuse/invalidation, operator ratios, recovery, and rollback.
+- `bun run verify` and `bun audit` pass from `/Users/alexmetelli/source/agentloop`; changed installed-skill JSON files pass `jq empty`; skill eval fixtures cover the new closure-first, ledger, and review-cap rules.
+- `PROGRESS.md` and `CHANGELOG.md` are current. Each implementation step is committed independently without sweeping in the unrelated changes that predated this plan.
 
 ## Assumptions and Open Questions
 
-- Assumption: GitHub issues are the authorization and scope interface, `STATUS.md` is hot semantic coordination state, and SQLite is durable operational state. None replaces the others.
-- Assumption: `dispatch` always queues work; the existing `worker` or `worker --once` starts execution. Foreground dispatch is intentionally deferred.
-- Assumption: Protocol labels are fixed and operator-created. Their intended meanings are:
-  - `agentloop:ready`: a human has approved the issue for autonomous implementation.
-  - `agentloop:running`: a specific Agentloop run currently owns or reconciles the issue.
-  - `agentloop:blocked`: the run reached a terminal external/human blocker and left exact evidence.
-- Assumption: Repeated polling should be quiet. `no_ready_issues` and `already_active` therefore use exit code `0`; authentication, malformed responses, missing labels, or other broken preconditions remain failures.
-- Assumption: A dispatch query uses a documented finite cap large enough for normal repositories and fails when the cap is reached, preventing silent partial queues.
-- Assumption: The durable objective stores issue numbers and canonical URLs only. GitHub-provided titles and bodies are untrusted inputs and are unnecessary for dispatch.
-- Assumption: A claim comment is written before removing `agentloop:ready`, so an interrupted claim leaves a durable ownership marker that recovery can inspect. The existing repository singleton prevents a second local run during the partial state.
-- Assumption: A repo-local dependency outside the dispatched set may be inspected but not modified. If it must change before a target can complete, the target becomes blocked with the exact dependency rather than broadening scope.
-- Assumption: The installed skills repository at `/Users/alexmetelli/.agents/skills` is a separate Git repository. Its changes require a separate commit and must not be bundled into an Agentloop commit.
-- Open question: A `/goal` executing this plan needs write access to both `/Users/alexmetelli/source/agentloop` and `/Users/alexmetelli/.agents/skills`. If its runtime sandbox cannot write the skills repository, Step 4 must be performed in a separate authorized skills-repo task and treated as an external blocker for final acceptance.
-- Open question: Cross-host stale-claim reconciliation is intentionally unresolved in this first slice. GitHub claims are advisory until a future distributed-ownership design is approved.
-- Open question: A live GitHub dry-run may be useful after implementation, but it is not required for completion because protocol labels and eligible issues may not exist in a safe test repository. No live write smoke is authorized by this plan.
+- Assumption: The review's “8–10 minute tranche” is implemented as a 10-minute default cooperative deadline. The hard deadline should be longer than the cooperative deadline so a final checkpoint can flush, but still bounded; use 11 minutes unless SDK abort behavior requires a documented smaller grace period.
+- Assumption: The existing `eventStallWarningMs` becomes an enforced stall policy rather than a warning-only declaration. Preserve compatibility with persisted JSON and document the semantic change.
+- Assumption: A controlled tranche timeout transitions to `continuing` and starts a fresh SDK turn/thread continuation. It is not `cancelled`, `failed`, or a useful outcome by itself.
+- Assumption: An event stall first aborts the open SDK stream and records a recoverable typed checkpoint. Repeated stalls are governed by the failure/stall cap and eventually stop instead of looping indefinitely.
+- Assumption: Official usage is available only from SDK `turn.completed`. When the SDK cannot report usage after abort, persist `usageComplete: false` and the last official totals; never infer the missing delta.
+- Assumption: Review-cycle counts and resolved-review identifiers arrive through typed checkpoint messages because their semantics belong to installed skills. The harness validates limits and durability but does not independently scrape GitHub review threads.
+- Assumption: Material Git/GitHub outcomes may be observed through existing structured command adapters, but outcome collection must use stable identifiers/state transitions rather than broad timestamps. Tests remain fake-backed.
+- Assumption: The existing SQLite schema requires a version-2 migration for typed outcomes, checkpoints, usage completeness, and evidence cache. Prefer additive tables/columns and keep legacy fingerprint fields readable until migration proves rollback-safe.
+- Assumption: Evidence cache entries are local operational state in SQLite, not Git artifacts. Cache payloads contain compact redacted evidence summaries and identifiers, never credentials, process environments, or full command output.
+- Assumption: The installed skills tree is a separate repository. Skill-policy changes require their own focused commit and must not be bundled into an Agentloop commit.
+- Open question resolved conservatively: The review calls the evidence cache “worth exploring,” but also places it in recommended PR 4. This plan includes it only after outcome telemetry and strict invalidation primitives exist; if those prerequisites cannot prove equivalence, the step must ship a disabled/no-hit cache with documented follow-up rather than unsafe reuse.
+- Open question: The current worktree contains pre-existing modifications to `CHANGELOG.md`, README/docs, install/CLI/control-envelope code, and tests. Plan execution must inventory and preserve them, then either build on them intentionally or use isolated commits/worktrees; it must not reset, overwrite, or accidentally include them.
 
 ## Implementation Approach
 
-### Ownership Boundary
+### Bounded Execution Boundary
 
-- Agentloop owns ready-issue discovery, deterministic scope serialization, durable run creation, queue idempotency, run-ID prompt context, operator output, and local supervision docs.
-- `codex-dev-team-goal` owns GitHub claim mutations, issue/PR reconciliation, dependency routing, role assignment, blocking semantics, merge completion, and cleanup of transient labels.
-- Intake producers remain separate skills or automations. They may create or enrich issues later, but they do not appear in Agentloop TypeScript and cannot apply `agentloop:ready` by default.
+- Add `src/application/bounded-turn-supervisor.ts` with a narrow interface shaped like `runTranche(run, policy, signal) -> TrancheOutcome`.
+- Inject a scheduler/timer port alongside the existing clock so deadline and stall tests advance deterministically without sleeping.
+- Combine operator signal, cooperative tranche timer, hard timer, and resettable event-stall timer through internal abort controllers. Classify the first cause as `operator_cancelled`, `tranche_elapsed`, `hard_deadline`, `event_stalled`, `sdk_failed`, `budget_exhausted`, or `review_cycle_exhausted`.
+- Keep event redaction and persistence at the harness boundary. The supervisor emits/persists each redacted event, resets the stall deadline on meaningful SDK events, captures official usage when `turn.completed` arrives, and always finalizes the turn/checkpoint transactionally.
+- A cooperative tranche outcome is `continuing`; hard deadline and repeated stalls/failures stop according to explicit policy. Operator SIGINT/SIGTERM remains cancellation.
 
-### Dispatch Data Flow
+### Durable Checkpoints and Schema Compatibility
 
-1. Parse `dispatch` arguments and require `--repo` plus `--trust-repo`.
-2. Run the existing doctor and resolve canonical repository/worktree paths plus the skill fingerprint.
-3. Use the command runner with explicit `cwd` and timeouts to confirm the three labels exist and list open issues carrying `agentloop:ready`.
-4. Parse and validate the GitHub JSON into a minimal `DispatchIssue` containing only `number` and canonical `url`; sort and deduplicate by number.
-5. Return `no_ready_issues` without opening SQLite when the set is empty.
-6. For `--dry-run`, return the exact set without creating a run or invoking Codex.
-7. Open the run store, query for an existing open run by repository key, and return `already_active` when one exists.
-8. Build a deterministic scope-only objective and create one queued run through a shared run-creation helper reused by `run --detach`.
-9. If another process wins the unique-open-run race, translate `OpenRunConflictError` into `already_active` rather than an error.
-10. The existing worker claims and executes the queued run. The prompt supplies `Run ID`, repository, worktree root, budgets, and the exact issue scope as delimited task data.
-11. The coordinator applies the installed-skill claim protocol before assigning builders and reconciles claim/PR state on recovery.
+- Add a transactional SQLite migration with additive checkpoint/outcome/cache storage plus turn usage-completeness and abort-reason fields.
+- Normalize persisted `RunLimits` by merging validated stored values over current defaults so version-1 rows gain new policy fields safely.
+- Persist compact checkpoint state separately from the full redacted SDK event stream. Store a snapshot digest for deduplication and append only changed typed state.
+- Keep old `state_fingerprint` and turn fingerprint columns readable during migration, but stop using them for no-progress decisions after outcome tracking is active.
 
-### Application And CLI Shape
+### Outcome Progress
 
-- Add `src/application/dispatch.ts` with:
-  - Label constants and minimal `DispatchIssue`/`DispatchDiscovery` types.
-  - Strict JSON parsing and response validation.
-  - `discoverReadyIssues()` using the existing `CommandRunner` port.
-  - `buildDispatchObjective()` producing deterministic scope data without titles or bodies.
-- Refactor the duplicated durable-run construction in `src/cli.ts` into a small internal helper that accepts already-validated repo context, objective, run options, clock, ID generator, and store. Do not add a generic dependency-injection framework.
-- Add a store lookup for an open run by repository key if the existing query is not already exposed. Preserve the unique partial index as the final race guard.
-- Keep `dispatch` always detached. It must not instantiate `ProductionCodexRunner`.
-- Add stable text and JSON renderers for dispatch outcomes; do not encode scheduling logic into the renderer.
+- Replace `src/infrastructure/fingerprint.ts` with an outcome observer split into typed snapshot collection and pure `observe(before, after)` comparison.
+- Stable outcome keys should include repository identity plus identifiers such as commit SHA, PR number/head/review state, issue number/closed state, review-thread identifier/resolved state, or blocker classification key.
+- Persist unique outcome keys so retries and recovery remain idempotent. Track `lastUsefulOutcomeAt` and derive no-progress from bounded turns/time since that point.
+- Source failures must not look like “no change.” Persist source availability and retain the previous trusted observation until the source recovers.
 
-### Claim Protocol
+### Checkpoint and Final Protocol
 
-- Add a concise `Label-Scoped Dispatch` section to `codex-dev-team-goal/SKILL.md`; do not copy it into Agentloop source.
-- Add an eval case to `codex-dev-team-goal/evals/evals.json` covering same-run recovery, different-run refusal, existing-PR reuse, and out-of-scope dependency behavior.
-- The coordinator writes claim state in recoverable order: stable run marker comment, add `agentloop:running`, then remove `agentloop:ready`. Every operation must be preceded by a live-state recheck.
-- `agentloop:blocked` is terminal, not a synonym for repo-local dependency blocking. A target waiting on an actionable in-scope dependency remains active in `STATUS.md`.
-- Existing/open PRs are active work and must enter checker/reviewer routing; they must not cause a duplicate builder branch.
+- Replace `ControlEnvelope` with a strict discriminated union. A `checkpoint` is delta-oriented; a `final` contains closure, approval, or terminal-blocker evidence.
+- Parse every agent message as a candidate control message. Persist valid checkpoints immediately, reject malformed typed messages safely, and require exactly one final message before a normal SDK completion can drive final transition logic.
+- Build continuation prompts from the compact latest checkpoint, unresolved delta, owned shard paths, effective limits, and recent outcomes rather than reproducing full closure evidence/rosters.
+- Deduplicate identical roster/checkpoint snapshots by canonical hash.
 
-### Compatibility And Security
+### Context and Scheduling Policy
 
-- Avoid a database migration by representing dispatch as an ordinary queued run with a deterministic objective. Stop and revise the plan if implementation requires new persisted columns.
-- Do not interpolate issue content into shell commands. All `gh` calls use command/argument arrays and explicit timeouts.
-- Do not persist full `gh auth` output, environment variables, credentials, telemetry payloads, or customer data.
-- Treat issue content as untrusted repository-adjacent input. Discovery stores only numbers/URLs; the coordinator retrieves content under the existing trust boundary.
-- A changed installed-skill fingerprint intentionally triggers the existing resume approval path for pre-existing runs. Document this operational consequence.
+- Add a lightweight hot-state inspector that measures `STATUS.md` bytes/lines through the filesystem port before each tranche. It never interprets or edits the file.
+- When over 64 KiB or 200 lines, add a mandatory prompt instruction to compact the index and move per-stream details to `STATUS.d/<issue-or-pr>.md` before assignment. Checkpoint shard paths must remain within the trusted repository.
+- Update `codex-dev-team-goal`, `team-coordinator`, and `agent-team-status-protocol` to own sharding, closure-first slot reservation, speculative-stream limits, draft-PR timing, per-head review batching, and cap behavior.
+- Add eval fixtures for oversized ledgers, one-near-merge/one-speculative scheduling, and a PR at its final allowed review cycle.
 
-### Deferred Intake Extension
+### Evidence Reuse and Metrics
 
-- After this plan is proven, a separate plan may add one read-only health producer that deduplicates and creates evidence-backed issues without applying `agentloop:ready` or launching implementation.
-- UX feedback, security, `improve`, Hallmark, churn, and telemetry producers remain later independent slices with their own privacy and source-governance review.
+- Expose a deep `EvidenceCache` interface keyed by repository, head SHA or stable patch ID, gate name/version, relevant-input digest, and environment fingerprint.
+- Cache only compact redacted results/failure signatures emitted through typed checkpoint evidence. A lookup is a miss if any key component is absent or differs.
+- Invalidate by construction through keys; add explicit pruning by age/count only for storage hygiene, never to broaden reuse.
+- Derive operator metrics from persisted official usage, elapsed run/checkpoint times, material outcome count, and typed review cycles. Mark ratios unavailable when usage or denominator data is incomplete.
+
+### Rollout and Rollback
+
+- Land in reviewable vertical slices with green gates after every commit. Keep new behavior default-on only after characterization, migration, and cancellation tests pass.
+- Preserve a temporary read-only display of legacy fingerprint data for diagnostics, but do not let it affect new progress transitions.
+- A rollback may stop using new tables while leaving additive schema intact. Do not downgrade or delete operator state automatically.
+- Run against fake streams first. Any opt-in live SDK smoke remains explicitly authorized through `AGENTLOOP_LIVE=1` and is not required for default completion.
 
 ## Quality Gates
 
-- Setup status: Existing gates are complete; no quality-gate setup step is required.
-- Baseline result: `bun run verify` passed on 2026-07-10 with 55 tests passed, 1 opt-in live test skipped, and a successful build.
+- Setup status: Existing Bun/Biome/TypeScript/test/build gates are complete; no quality-gate setup step is required.
+- Baseline result: `bun run verify` passed on 2026-07-11 with 73 tests passed, one opt-in live SDK test skipped, zero failures, and a successful Bun build on the current dirty worktree.
 - Install command: `bun install --frozen-lockfile`
 - Baseline command: `bun run verify`
 - Format command: `bun run format:check`
@@ -177,43 +152,35 @@
 - Build command: `bun run build`
 - Aggregate gate: `bun run verify`
 - Dependency security gate: `bun audit`
-- Skills-repo syntax gate: `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json`
-- Skills-repo diff gate: `git -C /Users/alexmetelli/.agents/skills diff --check`
-- Skill fingerprint integration gate: `bun dist/cli.js doctor --repo . --json`
-- Live GitHub/model calls: Not part of default or required validation. Any live smoke requires separate explicit authorization and must remain read-only unless the user expands scope.
+- Installed-skill JSON gate: `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json /Users/alexmetelli/.agents/skills/team-coordinator/evals/evals.json /Users/alexmetelli/.agents/skills/agent-team-status-protocol/evals/evals.json`
+- Live SDK smoke: `AGENTLOOP_LIVE=1 bun test test/live --timeout 120000` only with explicit authorization; not part of default completion.
 
 ## Progress Tracking
 
 - File: `PROGRESS.md`
-- Requirement: Create `PROGRESS.md` before implementation begins. The file is currently absent and must be created in Step 0.
-- Initial content: Include this plan title and sources, a checklist for Steps 0 through 6, the passing baseline result, current status, next step, and a concise update log.
-- Update rule: After each completed step, update `PROGRESS.md` with the completed step, validation results, commit reference if available, current status, and next step.
-- Cross-repo rule: Record Agentloop and installed-skills commit references separately. Never imply an external skill change is committed when only the Agentloop repository changed.
+- Requirement: Create `PROGRESS.md` before any implementation work begins. If it already exists, preserve its prior history and reconcile it to this plan rather than overwriting unrelated progress.
+- Update rule: After each step is completed, update `PROGRESS.md` with the completed step, validation results, commit reference if available, current status, and next step.
 
 ## Changelog Tracking
 
 - File: `CHANGELOG.md`
 - Standard: Keep a Changelog 1.0.0, <https://keepachangelog.com/en/1.0.0/>
-- Requirement: `CHANGELOG.md` already exists. Step 0 must preserve its entries and consolidate its duplicate `### Added` headings under the single `## [Unreleased]` section before implementation begins.
-- Initial structure: Keep `# Changelog`, the standard preamble, and `## [Unreleased]`; each applicable category appears at most once and empty categories are omitted.
-- Update rule: After each step is completed and validated, update `CHANGELOG.md` before creating that step's Agentloop commit only when the step shipped a functional change.
-- Qualifying entries: The dispatch command, stable dispatch output, run-ID prompt propagation, and label-claim integration are functional changes.
-- Exclusions: Do not add entries for planning, progress tracking, docs-only work, tests/coverage, CI/validation runs, formatting, or skills-repo-only bookkeeping.
+- Requirement: Create `CHANGELOG.md` before implementation begins. If it already exists, preserve valid existing entries and normalize only what this plan requires.
+- Initial content: Include `# Changelog`, the standard preamble, and one `## [Unreleased]` section at the top.
+- Update rule: After each step is completed and validated, update `CHANGELOG.md` before creating that step's commit only if the step shipped a functional change. Omit entries for chores, progress tracking, implementation plans, docs-only updates, tests or coverage, CI or validation runs, framework migration housekeeping, and empty category headings.
 
 ## Goal Handoff
 
-- Readiness: This plan is ready to be used as a `/goal` payload after `PLAN.md` is reviewed.
-- Scope: The `/goal` should execute only this label-dispatch and claim-protocol slice across `/Users/alexmetelli/source/agentloop` and `/Users/alexmetelli/.agents/skills/codex-dev-team-goal` unless the user explicitly expands it.
-- Repository ownership: Keep the Agentloop root checkout coordinator-only, preserve unrelated changes, use focused worktrees/branches for implementation streams, and commit skills-repo changes separately.
-- Review: Every implementation PR must pass the `codex-dev-team-goal` PR Context Gate, checker evidence, required CI, and `maintainer-reviewer` acceptance before merge.
-- Done: The `/goal` is complete only when every item in `## Definition of Done` is satisfied, all incremental steps are complete, required gates pass or documented pre-existing failures are handled, both repository states are reconciled, `PROGRESS.md` and `CHANGELOG.md` are current, and final issue/PR/commit/review evidence is recorded.
-- Stop boundary: Do not start scheduled discovery producers after completing this plan. Record them as deferred follow-up work only.
+- Readiness: This plan is ready to be used as a `/goal` payload.
+- Scope: The `/goal` should execute only the work described in this plan unless the user explicitly expands it.
+- Dirty-worktree rule: Before editing, inventory the current diff and assign ownership of overlapping files. Preserve all pre-existing changes and use isolated worktrees or narrowly staged commits where necessary.
+- Done: The `/goal` is complete only when every item in `## Definition of Done` is satisfied, all incremental steps are complete, required quality gates pass or documented pre-existing failures are handled, `PROGRESS.md` and `CHANGELOG.md` are current, separate repository commits remain separate, and the final state is summarized for the user.
 
 ## Incremental Steps
 
 ### Step 0: Progress and Changelog Tracking Setup
 
-Goal: Establish durable tracking for the label-dispatch implementation while preserving the repository's existing changelog history.
+Goal: Establish durable execution tracking without losing the repository's existing plan history or current dirty changes.
 
 Depends on:
 
@@ -221,20 +188,19 @@ Depends on:
 
 Changes:
 
-- Create `PROGRESS.md` at the Agentloop repository root with the plan sources, Step 0-6 checklist, passing baseline, current status, next step, and update rules.
-- Preserve prior shipped entries in `CHANGELOG.md` and consolidate the duplicate `### Added` headings under `## [Unreleased]`.
-- Record the current clean/dirty state of both `/Users/alexmetelli/source/agentloop` and `/Users/alexmetelli/.agents/skills`, treating pre-existing skill-tree changes as user-owned.
-- Stage and commit only `PLAN.md`, `PROGRESS.md`, and the changelog normalization in Agentloop. Do not include unrelated working-tree changes.
+- Inventory `git status --short`, the existing diff, current `PROGRESS.md`, and current `CHANGELOG.md`; record the pre-existing modified-file set in `PROGRESS.md` so later commits do not sweep it in accidentally.
+- Create or reconcile `PROGRESS.md` with this plan's title/source, a checklist for Steps 0–8, current status, dirty-worktree preservation note, and short update log.
+- Create or reconcile `CHANGELOG.md` with `# Changelog`, the Keep a Changelog preamble, and exactly one top-level `## [Unreleased]` section.
+- Document that `PROGRESS.md` is updated after every completed step and `CHANGELOG.md` only for validated functional changes.
 
 Acceptance criteria:
 
-- `PROGRESS.md` exists and contains every planned step plus the baseline result.
-- `CHANGELOG.md` has one `## [Unreleased]` section and no duplicate change-category headings.
-- Both repositories' pre-existing changes and ownership are recorded without being reverted or accidentally staged.
+- Both tracking files exist, prior qualifying content is preserved, and the full step checklist is visible.
+- Pre-existing dirty files are recorded and are not staged as part of this setup unless the user already intended them for the same change.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Makes execution inspectable and establishes the required changelog contract before functional work.
+- Establishes the audit trail and commit-scope guard required for autonomous execution.
 
 Validation:
 
@@ -244,25 +210,23 @@ Validation:
 - Run `bun run test`.
 - Run `bun run build`.
 - Run `bun run verify`.
-- Run `git diff --check` in Agentloop.
-- Run `git -C /Users/alexmetelli/.agents/skills diff --check`.
-- Fix all failures before proceeding.
+- Fix any new failures before proceeding.
 
 Progress:
 
-- Mark Step 0 complete in `PROGRESS.md`, record validation results and the Agentloop commit reference, set Step 1 as next.
+- Mark Step 0 complete in `PROGRESS.md`, record validation results and commit reference if available, set current status, and identify Step 1 as next.
 
 Changelog:
 
-- Do not add an entry for planning/tracking setup or category normalization because these are non-functional changes.
+- Do not add a changelog entry because tracking setup is not a functional change.
 
 Commit:
 
-- `docs: initialize label dispatch implementation tracking`
+- `chore: initialize bounded-supervisor progress tracking`
 
-### Step 1: Ready-Issue Discovery And Scope Contract
+### Step 1: Characterize Current Turn, Cancellation, and Persistence Semantics
 
-Goal: Produce a deterministic, minimal, read-only dispatch scope from GitHub without creating a run or mutating issues.
+Goal: Lock down current behavior and the desired bounded semantics before extracting the supervisor.
 
 Depends on:
 
@@ -270,51 +234,45 @@ Depends on:
 
 Changes:
 
-- Add `src/application/dispatch.ts` with fixed protocol-label constants, minimal dispatch DTOs, strict GitHub JSON parsing, label preflight, bounded ready-issue discovery, deterministic sorting/deduplication, cap detection, and scope-only objective construction.
-- Use `CommandRunner.run()` with structured arguments, canonical repository `cwd`, and explicit timeouts.
-- Persist no issue title/body/comment fields in application DTOs or objective text.
-- Add `test/unit/dispatch.test.ts` using fake command responses for success, missing labels, no issues, duplicate/out-of-order results, malformed JSON, invalid issue records, command failure, and cap handling.
-- Add security assertions that adversarial titles/bodies returned by fixtures never enter the objective or durable DTO.
+- Add focused fake-stream characterization tests in `test/unit/foreground-run.test.ts` for an endless stream, a stream that stops emitting events, operator abort, SDK failure before/after `thread.started`, current failure counting, and missing official usage.
+- Extend `test/support/fakes.ts` with deterministic async stream controls and an injected fake scheduler/timer; avoid real sleeps and model/network calls.
+- Add migration compatibility tests in `test/unit/sqlite-run-store.test.ts` that construct a version-1 database/run-limits payload and prove it remains readable after new defaults are introduced.
+- Record the intended transition table for each abort cause in test names/fixtures so the next step cannot collapse timeout, stall, failure, and cancellation into one path.
 
 Acceptance criteria:
 
-- Discovery returns only validated issue numbers and canonical URLs in ascending order.
-- Missing any protocol label fails with exact setup guidance.
-- Empty discovery is a typed no-work result.
-- GitHub failures, malformed responses, and cap exhaustion fail closed.
-- The module performs no SQLite writes, Codex calls, label mutations, or network activity in default tests.
+- Characterization tests pass against the current implementation for behavior that must remain compatible, especially Ctrl-C cancellation and recovery after `thread.started`; deterministic endless/stall fixtures are ready for Step 2's new supervisor assertions without leaving the suite red.
+- No production behavior is weakened and default tests remain offline.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Establishes the safe intake boundary and deterministic issue-set representation required by dispatch.
+- Reduces risk around the highest-impact extraction and establishes regression proofs for typed abort behavior.
 
 Validation:
 
-- Run `bun test test/unit/dispatch.test.ts`.
 - Run `bun run format:check`.
 - Run `bun run lint`.
 - Run `bun run typecheck`.
 - Run `bun run test`.
 - Run `bun run build`.
 - Run `bun run verify`.
-- Run `git diff --check`.
 - Fix all failures before proceeding.
 
 Progress:
 
-- Update `PROGRESS.md` with Step 1 completion, validation results, commit reference, current status, and Step 2 as next.
+- Update `PROGRESS.md` with the characterized cases, validation results, commit reference if available, current status, and Step 2 as next.
 
 Changelog:
 
-- Do not add an entry because the discovery module is not yet operator-visible.
+- Do not add a changelog entry because characterization tests do not ship functional behavior.
 
 Commit:
 
-- `feat: add ready issue discovery contract`
+- `test: characterize bounded turn termination semantics`
 
-### Step 2: Idempotent Dispatch CLI And Durable Queueing
+### Step 2: Introduce and Enforce the BoundedTurnSupervisor
 
-Goal: Let operators and polling jobs safely queue one exact label-scoped repository run.
+Goal: End each outer turn within a bounded tranche and classify every termination cause correctly.
 
 Depends on:
 
@@ -322,53 +280,50 @@ Depends on:
 
 Changes:
 
-- Add `dispatch` to CLI help and command routing in `src/cli.ts` with `--repo`, `--trust-repo`, `--dry-run`, `--json`, model/reasoning, approval-mode, and existing limit options.
-- Reuse doctor output and extract a small shared queued-run creation helper from the existing `run --detach` path instead of duplicating run construction.
-- Expose an open-run lookup by repository key in `SqliteRunStore` when needed for idempotent polling.
-- Return stable `dry_run`, `queued`, `no_ready_issues`, and `already_active` outcomes in text and JSON.
-- Translate a concurrent unique-open-run race into `already_active` with the winning run ID.
-- Ensure normal dispatch always creates `status: queued` and never constructs a Codex runner; the worker remains the only execution path for dispatched work.
-- Add black-box, lifecycle, store, and security tests in `test/unit/cli-blackbox.test.ts`, `test/unit/run-lifecycle.test.ts`, `test/unit/sqlite-run-store.test.ts`, and `test/unit/security-hardening.test.ts` as appropriate.
+- Add `src/application/bounded-turn-supervisor.ts` with typed `TranchePolicy`, `TrancheAbortReason`, and `TrancheOutcome` interfaces.
+- Add an injectable scheduler/timer port in `src/application/ports.ts` plus a production implementation; wire it through CLI dependencies and fake adapters.
+- Extend `RunLimits` in `src/domain/run.ts` with cooperative tranche, hard deadline, stall, and repeated-stall/failure policy while retaining the 10-minute/11-minute defaults described above.
+- Normalize stored run-limit JSON in `src/infrastructure/sqlite/run-store.ts` so existing rows inherit validated defaults rather than producing `undefined` limits.
+- Refactor `src/cli.ts` so the supervisor owns stream iteration, timer reset, combined abort signals, event persistence, official usage capture, turn finalization, and transition selection.
+- Enforce `maxConsecutiveTurnFailures`; treat cooperative tranche expiry as `continuing`, hard/repeated stall according to explicit stop policy, and operator signals as `cancelled`.
+- Update status/event rendering to show the typed abort reason without exposing sensitive payloads.
+- Make all Step 1 deadline, stall, failure-cap, recovery, and cancellation tests green.
 
 Acceptance criteria:
 
-- Dry-run and no-work paths do not open or mutate SQLite.
-- A ready set creates exactly one queued run with the exact deterministic objective and selected run options.
-- Repeated and concurrent dispatches cannot create duplicate open runs.
-- Trust/auth/preflight failures happen before durable mutation.
-- Stable JSON contains only the documented fields and no issue content beyond numbers/URLs.
+- Endless and stalled fake streams terminate deterministically without wall-clock sleeps.
+- Tranche timeout never becomes cancellation or SDK failure, Ctrl-C remains cancellation, and the failure limit prevents turn `N+1`.
+- The CLI no longer contains the low-level timer/stream policy that belongs in the supervisor.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Delivers the operator-visible dispatcher and reuses the existing durable worker rather than adding another execution system.
+- Delivers the primary deep module and gives the harness an enforceable steering seam.
 
 Validation:
 
-- Run targeted dispatch CLI/store/security tests.
 - Run `bun run format:check`.
 - Run `bun run lint`.
 - Run `bun run typecheck`.
 - Run `bun run test`.
 - Run `bun run build`.
 - Run `bun run verify`.
-- Run `git diff --check`.
 - Fix all failures before proceeding.
 
 Progress:
 
-- Update `PROGRESS.md` with Step 2 completion, validation results, commit reference, current status, and Step 3 as next.
+- Update `PROGRESS.md` with supervisor behavior, validation results, commit reference if available, current status, and Step 3 as next.
 
 Changelog:
 
-- Add an `Added` entry under `## [Unreleased]` for the label-scoped `dispatch` command and its idempotent scheduled-polling outcomes.
+- Add an `Added` or `Changed` entry under `## [Unreleased]` describing bounded recoverable Codex tranches and enforced stall/failure limits.
 
 Commit:
 
-- `feat: queue label scoped agentloop runs`
+- `feat: bound Codex work into supervised tranches`
 
-### Step 3: Durable Run Identity In Coordinator Prompts
+### Step 3: Persist Typed Checkpoints and Complete Usage State
 
-Goal: Give the coordinator a stable run identity it can publish in GitHub claim evidence.
+Goal: Make every tranche boundary durably observable, including when official usage is unavailable.
 
 Depends on:
 
@@ -376,48 +331,48 @@ Depends on:
 
 Changes:
 
-- Add `Run ID: ${run.id}` to the fixed prompt header in `src/codex/prompt-builder.ts`.
-- Keep the run ID outside `<target_work>` so it is trusted harness context, while the dispatch issue set remains delimited task data.
-- Extend `test/unit/codex-contracts.test.ts` or focused prompt tests to verify initial, continuation, recovery, and approval-response prompts carry the same run ID without leaking unrelated persisted state.
-- Confirm redaction and prompt hashing behavior remain unchanged apart from the intentional run-ID input.
+- Add SQLite migration version 2 in `src/infrastructure/sqlite/migrations.ts` with additive checkpoint storage and turn fields for typed abort reason and usage completeness; retain all version-1 data.
+- Add checkpoint/usage types in `src/domain/run.ts` and transactional create/list/latest methods in `src/infrastructure/sqlite/run-store.ts`.
+- Have `BoundedTurnSupervisor` finalize every tranche with one compact checkpoint, even for controlled timeout/stall/failure paths.
+- Store official token deltas only when the SDK emits them. Persist `usageComplete: false` when a stream abort prevents an official total; never turn absence into a trusted zero.
+- Extend `status` and `events` JSON/text rendering with last checkpoint time, abort classification, and usage completeness.
+- Add migration rollback/future-version, redaction, interrupted-usage, and atomic-finalization tests.
 
 Acceptance criteria:
 
-- Every outer-turn prompt contains the exact durable run ID once in trusted harness context.
-- Resumed and recovered turns preserve the same ID.
-- No process environment, credential, or approval response is added to the header.
+- Existing databases migrate transactionally and retain their records.
+- Every bounded completion has one checkpoint, and operator output distinguishes complete official usage from unavailable usage.
+- Checkpoint persistence never includes process environments, credentials, or unredacted error/output payloads.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Creates the stable correlation key required for same-run recovery and different-run refusal in GitHub.
+- Makes steering and usage visibility durable at each bounded seam.
 
 Validation:
 
-- Run targeted prompt/contract tests.
 - Run `bun run format:check`.
 - Run `bun run lint`.
 - Run `bun run typecheck`.
 - Run `bun run test`.
 - Run `bun run build`.
 - Run `bun run verify`.
-- Run `git diff --check`.
 - Fix all failures before proceeding.
 
 Progress:
 
-- Update `PROGRESS.md` with Step 3 completion, validation results, commit reference, current status, and Step 4 as next.
+- Update `PROGRESS.md` with migration evidence, checkpoint/usage behavior, commit reference if available, current status, and Step 4 as next.
 
 Changelog:
 
-- Add a `Changed` entry under `## [Unreleased]` noting that coordinator turns receive the durable run identifier for claim/recovery correlation.
+- Add an `Added` entry under `## [Unreleased]` for durable tranche checkpoints and explicit usage completeness.
 
 Commit:
 
-- `feat: expose run identity to coordinator turns`
+- `feat: persist supervised tranche checkpoints`
 
-### Step 4: GitHub-Visible Claim Protocol In Installed Skills
+### Step 4: Replace Activity Fingerprints with OutcomeProgress
 
-Goal: Make dispatched issue ownership and terminal blocking visible and recoverable in GitHub without moving workflow policy into Agentloop TypeScript.
+Goal: Reset no-progress only for durable delivery or decision outcomes.
 
 Depends on:
 
@@ -425,30 +380,25 @@ Depends on:
 
 Changes:
 
-- In `/Users/alexmetelli/.agents/skills/codex-dev-team-goal/SKILL.md`, add a concise `Label-Scoped Dispatch` workflow covering live recheck, stable run marker comments, label transition order, same-run recovery, different-run refusal, existing-PR reuse, out-of-scope blocker inspection, terminal blocking, and completion cleanup.
-- Update `/Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json` with scenarios that distinguish same-run recovery from a different active claim and prevent out-of-scope implementation.
-- Update `references/sub-agent-prompts.md` only if a role prompt needs dispatch-scope awareness; keep claim mutation coordinator-owned and avoid duplicating the main protocol.
-- Run Agentloop doctor after the skill change and record the new fingerprint. Document that pre-existing runs require the existing `--accept-skill-change` or approval flow before resume.
-- Commit skills-repo changes separately from Agentloop tracking/changelog updates.
+- Replace `src/infrastructure/fingerprint.ts` with `src/infrastructure/outcome-progress.ts` or a small module family containing `OutcomeSnapshot`, `OutcomeDelta`, source availability, stable keys, and pure comparison logic.
+- Collect stable Git/GitHub states through existing structured command adapters: pushed/local head relation, PR identity/head/state/review resolution, issue closed state, and typed blocker state. Do not use broad timestamps as progress.
+- Add a unique outcomes table/methods through migration 2 and the run store, including `lastUsefulOutcomeAt` and source availability needed for fail-closed decisions.
+- Update supervisor/CLI transitions so `noProgressCount` changes only after a trusted comparison and only a new unique outcome resets it.
+- Remove `STATUS.md`, `git status`, worktree lists, and timestamp-only lists from progress decisions; retain separately useful diagnostics if needed.
+- Add pure and integration tests for one pushed SHA, PR open/advance/merge, issue close, review resolution, new blocker classification, idempotent replay, tracker-only edits, dirty files, repeated commands, timestamp churn, and unavailable sources.
 
 Acceptance criteria:
 
-- The coordinator claims only the exact dispatched set and does not broaden implementation to outside issues.
-- Closed issues and existing PRs are reconciled rather than duplicated.
-- A same-run marker is recoverable; a different-run marker prevents mutation/assignment.
-- Terminal blockers receive `agentloop:blocked`, exact evidence, and no false completion.
-- No role prompt body is copied into Agentloop TypeScript.
+- Each durable outcome is recorded once and only once.
+- Activity-only changes never reset no-progress.
+- An unavailable required source neither invents progress nor increments a false no-progress count.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Completes the issue-tracker-visible half of the dispatch boundary while preserving the harness/skill architecture.
+- Aligns stop/continue decisions with shipped outcomes rather than work performed.
 
 Validation:
 
-- Run `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json`.
-- Run `git -C /Users/alexmetelli/.agents/skills diff --check`.
-- Run any existing focused skill eval/validator available in the skills repository without widening repairs to unrelated findings.
-- Run `bun dist/cli.js doctor --repo . --json` from Agentloop and verify the required skill plus fingerprint checks pass.
 - Run `bun run format:check`.
 - Run `bun run lint`.
 - Run `bun run typecheck`.
@@ -459,20 +409,19 @@ Validation:
 
 Progress:
 
-- Update `PROGRESS.md` with the separate Agentloop and skills-repo commit references, validation results, fingerprint change, current status, and Step 5 as next.
+- Update `PROGRESS.md` with outcome cases, idempotency evidence, validation results, commit reference if available, current status, and Step 5 as next.
 
 Changelog:
 
-- Add a `Changed` entry in Agentloop for GitHub-visible label claims and terminal-blocker evidence only after the skill integration is validated. Do not add a second entry for evals or skill-file maintenance.
+- Add a `Changed` entry under `## [Unreleased]` describing outcome-based progress and more accurate stuck detection.
 
-Commits:
+Commit:
 
-- Skills repository: `feat: add agentloop issue claim protocol`
-- Agentloop tracking/changelog: `docs: record dispatch claim integration`
+- `feat: track material outcomes instead of activity`
 
-### Step 5: Operator Polling, Security, And Recovery Documentation
+### Step 5: Split Compact Checkpoints from Final Control Messages
 
-Goal: Make the new boundary operable without adding a scheduler or public service.
+Goal: Keep ongoing observability cheap while preserving strict final closure evidence.
 
 Depends on:
 
@@ -480,77 +429,173 @@ Depends on:
 
 Changes:
 
-- Update `README.md` with dispatch syntax, fixed labels, human authorization semantics, no-work/already-active behavior, dry-run/JSON output, and the worker handoff.
-- Update `docs/architecture.md` with the discovery/dispatch/worker/coordinator boundary and ownership of GitHub claim semantics.
-- Update `docs/operations.md` with label setup commands, a simple `launchd` polling shape for `dispatch`, the existing worker supervision, expected exit behavior, claim recovery, and skill-fingerprint resume handling.
-- Update `docs/security.md` with issue-content trust, minimal durable scope, no title/body/PII persistence, label permissions, and the explicit deferral of webhook/telemetry ingestion.
-- Document but do not run `bun run install:global`; service installation and profile changes remain operator actions outside this implementation goal.
+- Refactor `src/codex/control-envelope.ts` into a strict discriminated `checkpoint | final` control-message schema and parser.
+- Define checkpoint deltas for changed agents, outcomes, blocker/approval changes, review-cycle state, next action, and optional owned shard; keep full issue/PR/review closure evidence in final messages only.
+- Update `src/codex/event-mapper.ts` and the supervisor to parse each agent message, persist valid checkpoints, canonicalize/deduplicate identical snapshots, and require a valid final message for final transition.
+- Update `src/codex/prompt-builder.ts` to request short change-triggered checkpoints plus a 2–3 minute heartbeat, and to build continuation context from the latest checkpoint/outcomes instead of repeating the entire roster and closure evidence.
+- Add contract tests for strict schemas, malformed checkpoints, duplicate snapshots, checkpoint-before-final streams, no-final completion, approval/blocker finals, and prompt token-shape regressions.
 
 Acceptance criteria:
 
-- An operator can create labels, dry-run dispatch, queue work, supervise the worker, inspect the run, and recover a claim using documented commands.
-- Documentation clearly separates successful polling no-ops from broken preconditions.
-- No documentation implies that discovery producers, webhooks, distributed claims, or production telemetry ingestion are implemented.
+- Repeated identical agent rosters persist once.
+- A checkpoint can update operator visibility without being mistaken for final completion.
+- Final completion still requires complete closure evidence and existing approval/security gates.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Makes the feature usable and sets safe expectations for scheduling, credentials, recovery, and deferred work.
+- Reduces control-message/context overhead while improving durable observability.
 
 Validation:
 
-- Run command/help content checks for every documented option.
 - Run `bun run format:check`.
 - Run `bun run lint`.
 - Run `bun run typecheck`.
 - Run `bun run test`.
 - Run `bun run build`.
 - Run `bun run verify`.
-- Run `git diff --check`.
 - Fix all failures before proceeding.
 
 Progress:
 
-- Update `PROGRESS.md` with Step 5 completion, validation results, commit reference, current status, and Step 6 as next.
+- Update `PROGRESS.md` with protocol compatibility, deduplication evidence, validation results, commit reference if available, current status, and Step 6 as next.
 
 Changelog:
 
-- Do not add a changelog entry for documentation-only work; functional dispatch/claim entries must already exist from Steps 2-4.
+- Add a `Changed` entry under `## [Unreleased]` for compact live checkpoints and strict final closure messages.
 
 Commit:
 
-- `docs: document label dispatch operations`
+- `feat: separate checkpoint and final control messages`
 
-### Step 6: Final Acceptance And `/goal` Closure Evidence
+### Step 6: Bound Hot Context and Enforce Closure-First Review Policy
 
-Goal: Prove the complete bounded slice and leave both repositories in a reconciled, reviewable state.
+Goal: Prevent oversized ledgers and uncontrolled parallel/review churn from consuming bounded tranches.
 
 Depends on:
 
-- Steps 0 through 5.
+- Step 5.
 
 Changes:
 
-- Review the complete Agentloop and skills-repo diffs against this plan and remove any accidental scope expansion.
-- Confirm all dispatch states and races are covered by fake-backed tests and that default tests make no model, GitHub, or network calls.
-- Run the built CLI help, doctor, and fake-backed black-box acceptance paths; do not perform a live GitHub write smoke.
-- Verify `PROGRESS.md`, `CHANGELOG.md`, README, architecture, operations, and security docs match the final behavior.
-- Record deferred follow-up candidates for a read-only health producer and cross-host stale-claim reconciliation without implementing or publishing them unless separately requested.
-- Reconcile branches, worktrees, PRs, reviews, skills-repo changes, and final commit references according to the `codex-dev-team-goal` closure gate.
+- Add a filesystem-backed hot-state inspector in Agentloop that measures `STATUS.md` bytes/lines and validates checkpoint-owned shard paths without parsing semantic content.
+- Add the default 64 KiB/200-line policy and inject a mandatory pre-assignment compaction/sharding instruction into prompts when exceeded.
+- Extend checkpoint review-cycle fields and supervisor policy so the configured cap cannot advance to cycle `N+1`; persist the PR, cycle, finding summary, and next decision on stop.
+- Update `/Users/alexmetelli/.agents/skills/codex-dev-team-goal/SKILL.md`, `/Users/alexmetelli/.agents/skills/team-coordinator/SKILL.md`, and `/Users/alexmetelli/.agents/skills/agent-team-status-protocol/SKILL.md` with closure-first slot reservation, at most one speculative stream while a PR is blocked, early draft PR creation, complete per-head finding batches, `STATUS.md` index/shard ownership, and hard review-cap behavior.
+- Update the three skill eval JSON files with oversized-ledger, closure-first scheduling, owned-shard, and final-review-cycle cases.
+- Add fake-filesystem and prompt tests proving a 140 KiB ledger triggers compaction before assignment and an in-cap ledger does not.
+- Keep Agentloop and installed-skills changes in separate repository commits.
 
 Acceptance criteria:
 
-- Every item in `## Definition of Done` is satisfied or an exact external blocker is recorded.
-- Agentloop and skills-repo changes are independently reviewable and committed in their correct repositories.
-- No target issue/PR/review thread or required gate remains unresolved.
-- No discovery producer, webhook, scheduler installation, PII path, or distributed claim mechanism has entered the diff.
+- Oversized hot state always produces clear, bounded instructions before new work assignment.
+- Semantic scheduling/sharding rules live only in installed skills.
+- Review cycle `N+1` is impossible after the configured cap without explicit operator resume/policy change.
 
-Definition-of-done advancement:
+Definition-of-done advance:
 
-- Completes the plan and produces the evidence required for `/goal` closure.
+- Constrains the two largest context/churn multipliers while preserving the thin-harness boundary.
 
 Validation:
 
-- Run `bun install --frozen-lockfile` if dependencies or the lockfile changed; otherwise record that it was not required.
+- Run `bun run format:check`.
+- Run `bun run lint`.
+- Run `bun run typecheck`.
+- Run `bun run test`.
+- Run `bun run build`.
+- Run `bun run verify`.
+- Run `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json /Users/alexmetelli/.agents/skills/team-coordinator/evals/evals.json /Users/alexmetelli/.agents/skills/agent-team-status-protocol/evals/evals.json`.
+- Fix all failures before proceeding.
+
+Progress:
+
+- Update `PROGRESS.md` with ledger threshold tests, review-cap evidence, both repository commit references if available, current status, and Step 7 as next.
+
+Changelog:
+
+- Add an `Added` or `Changed` entry under Agentloop's `## [Unreleased]` for hot-ledger warnings and enforced review-cycle limits. Do not add an Agentloop changelog entry solely for skill documentation/eval edits.
+
+Commit:
+
+- Agentloop: `feat: bound hot coordination context and review cycles`
+- Installed skills: `feat: prioritize closure in bounded agent loops`
+
+### Step 7: Add Strict Exact-Head Evidence Reuse
+
+Goal: Avoid rerunning unchanged gates or rediscovering unchanged external blockers without accepting stale evidence.
+
+Depends on:
+
+- Step 6.
+
+Changes:
+
+- Add `src/application/evidence-cache.ts` with a deep lookup/store interface keyed by repository, head SHA or stable patch ID, gate/version, relevant-input digest, and environment fingerprint.
+- Add compact redacted cache persistence and bounded pruning through migration 2/run-store methods.
+- Extend checkpoint evidence records so installed skills can report gate identity, exact head/stable patch, declared relevant inputs, environment fingerprint, result, and reusable failure signature.
+- Include valid cache hits in continuation prompts as evidence references; require the coordinator to rerun when any key is absent/different or when product inputs changed.
+- Add tests for exact hits, each independent invalidation dimension, docs/tracker-only reuse with unaffected declared inputs, product-code invalidation, failure-signature reuse, redaction, and cache pruning.
+- If stable equivalence cannot be proven for a gate, persist telemetry but return a cache miss; never weaken the acceptance gate to force reuse.
+
+Acceptance criteria:
+
+- Cache hits occur only under full key equivalence and are explainable in status/checkpoint output.
+- Stale exact-head acceptance cannot survive a product-code or environment/gate-version change.
+- No cached record contains secrets or full command/auth output.
+
+Definition-of-done advance:
+
+- Delivers safe evidence reuse after the outcome and checkpoint primitives needed to govern it exist.
+
+Validation:
+
+- Run `bun run format:check`.
+- Run `bun run lint`.
+- Run `bun run typecheck`.
+- Run `bun run test`.
+- Run `bun run build`.
+- Run `bun run verify`.
+- Fix all failures before proceeding.
+
+Progress:
+
+- Update `PROGRESS.md` with cache hit/miss/invalidation evidence, validation results, commit reference if available, current status, and Step 8 as next.
+
+Changelog:
+
+- Add an `Added` entry under `## [Unreleased]` describing safe exact-head gate and blocker evidence reuse.
+
+Commit:
+
+- `feat: reuse strictly equivalent execution evidence`
+
+### Step 8: Expose Outcome Efficiency, Document Operations, and Run Final Gates
+
+Goal: Make bounded execution operable and verify the complete architecture as one coherent system.
+
+Depends on:
+
+- Steps 0–7.
+
+Changes:
+
+- Extend status text/JSON in `src/cli.ts` and presentation helpers with last useful outcome, checkpoint age, usage completeness, outcomes by type, review cycles, and tokens/time/cycles per outcome. Render unavailable ratios honestly.
+- Update `README.md`, `docs/architecture.md`, `docs/operations.md`, and `docs/security.md` with the supervisor boundary, default deadlines, transition table, checkpoint/final protocol, outcome semantics, ledger/shard policy, review caps, evidence cache keys/invalidation, recovery, redaction, and rollback.
+- Add/extend CLI black-box and security tests for stable output, incomplete ratios, redaction, recovery from tranche/stall stops, and migration-visible fields.
+- Run dependency audit and final repository/skills diffs; confirm no local SQLite/WAL/log/coverage/worktree artifacts are tracked.
+- Reconcile `PROGRESS.md` and `CHANGELOG.md`, ensuring one `## [Unreleased]`, no empty headings, and only observable functional entries.
+
+Acceptance criteria:
+
+- Operators can explain why a run continued/stopped, when it last achieved an outcome, whether usage is complete, and whether evidence was reused.
+- Documentation and output describe the same defaults and state transitions enforced by code.
+- All default gates and dependency/security checks pass with unrelated pre-existing changes preserved and intentionally scoped.
+
+Definition-of-done advance:
+
+- Completes operator visibility, documentation, security validation, and the full plan definition of done.
+
+Validation:
+
 - Run `bun run format:check`.
 - Run `bun run lint`.
 - Run `bun run typecheck`.
@@ -558,20 +603,18 @@ Validation:
 - Run `bun run build`.
 - Run `bun run verify`.
 - Run `bun audit`.
-- Run `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json`.
-- Run `git diff --check` in Agentloop.
-- Run `git -C /Users/alexmetelli/.agents/skills diff --check`.
-- Run `bun dist/cli.js doctor --repo . --json` and confirm required checks pass.
-- Fix all failures before declaring completion.
+- Run `jq empty /Users/alexmetelli/.agents/skills/codex-dev-team-goal/evals/evals.json /Users/alexmetelli/.agents/skills/team-coordinator/evals/evals.json /Users/alexmetelli/.agents/skills/agent-team-status-protocol/evals/evals.json`.
+- Run `git status --short --branch --untracked-files=all` in both repositories and verify commit scope/artifact hygiene.
+- Fix all failures before completion.
 
 Progress:
 
-- Mark Step 6 and the overall plan complete in `PROGRESS.md`; record all gate results, final Agentloop and skills-repo commit/PR/review references, residual risks, deferred work, and final status.
+- Mark Step 8 and the overall plan complete in `PROGRESS.md`; record all final gate results, Agentloop and installed-skills commit references, current status, and no next implementation step.
 
 Changelog:
 
-- Do not add an entry for final validation or progress closure. Confirm existing `Added` and `Changed` entries accurately describe only shipped behavior.
+- Add or refine qualifying `Added`/`Changed`/`Fixed`/`Security` entries under `## [Unreleased]` for the observable bounded-supervision release. Do not add entries for docs, tests, audits, or plan completion alone.
 
 Commit:
 
-- `docs: record label dispatch acceptance`
+- `docs: finalize bounded supervisor operations`
